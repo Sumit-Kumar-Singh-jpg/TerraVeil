@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SubSentry — Industrial Mine Subsidence & Geospatial Monitoring Console</title>
+    
+    <!-- Inter & JetBrains Mono Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet GIS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Application CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="app-container">
+    
+    <!-- ==================================================
+         LEFT SIDEBAR
+         =================================================== -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-logo">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="currentColor"/>
+                    <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="brand-text">
+                <h2>SubSentry</h2>
+                <span>Geospatial Safety Platform</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <div class="nav-section">
+                <span class="nav-section-title">MONITORING</span>
+                <a href="#" class="nav-link active" data-target="view-live">
+                    <span class="nav-icon">⌖</span>
+                    <span>Live Monitoring</span>
+                </a>
+                <a href="#" class="nav-link" data-target="view-history">
+                    <span class="nav-icon">◷</span>
+                    <span>Historical Analysis</span>
+                </a>
+                <a href="#" class="nav-link" data-target="view-network">
+                    <span class="nav-icon">⌁</span>
+                    <span>Sensor Network</span>
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <span class="nav-section-title">SAFETY</span>
+                <a href="#" class="nav-link" data-target="view-alerts">
+                    <span class="nav-icon">⚠</span>
+                    <span>Risk & Alerts</span>
+                    <span class="badge badge-danger" id="sidebar-alert-badge">0</span>
+                </a>
+                <a href="#" class="nav-link" data-target="view-zones">
+                    <span class="nav-icon">⚃</span>
+                    <span>Risk Zones</span>
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <span class="nav-section-title">ANALYTICS</span>
+                <a href="#" class="nav-link" data-target="view-ai">
+                    <span class="nav-icon">◈</span>
+                    <span>AI Analysis</span>
+                </a>
+                <a href="#" class="nav-link" data-target="view-reports">
+                    <span class="nav-icon">▤</span>
+                    <span>Reports</span>
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <span class="nav-section-title">SYSTEM</span>
+                <a href="#" class="nav-link" data-target="view-health">
+                    <span class="nav-icon">⚙</span>
+                    <span>System Health</span>
+                </a>
+                <a href="#" class="nav-link" data-target="view-settings">
+                    <span class="nav-icon">⚙</span>
+                    <span>Settings</span>
+                </a>
+            </div>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="status-indicator">
+                <span class="status-dot dot-online"></span>
+                <div>
+                    <strong>● LOCAL MODE</strong>
+                    <span>Simulation Active</span>
+                </div>
+            </div>
+            <span class="sys-version">SIMULATION MODE</span>
+        </div>
+    </aside>
+
+    <!-- ==================================================
+         MAIN CONTENT WORKSPACE
+         =================================================== -->
+    <main class="main-workspace">
+        
+        <!-- TOP HEADER -->
+        <header class="top-header">
+            <div class="header-left">
+                <div class="site-selector">
+                    <span class="selector-label">ACTIVE SITE</span>
+                    <select id="mine-select" class="custom-select">
+                        <option value="chasnalla" selected>Chasnalla Colliery — Panel East</option>
+                        <option value="jharia">Jharia Coalfield (Jharkhand, IN)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="emergency-alert-trigger-wrapper">
+                    <button class="btn-emergency-alert" id="btn-trigger-alert" title="Emergency Command: Activate All Mine Sirens & Trigger Red Alert">
+                        <span class="alert-icon-pulse">🚨</span>
+                        <span class="alert-btn-text">ALERT</span>
+                    </button>
+                </div>
+                <div class="connection-status">
+                    <span class="status-pill offline-first" id="header-status-pill">
+                        ● LOCAL MODE (SQLite + ML)
+                    </span>
+                    <span class="status-pill sim-badge">
+                        SIMULATION MODE
+                    </span>
+                </div>
+                <div class="sync-status">
+                    <span>Sync: <strong id="header-sync-time">--</strong></span>
+                </div>
+                <div class="notifications-bell">
+                    <button class="header-btn" id="bell-btn" title="System Alerts">
+                        🔔
+                        <span class="bell-badge badge-danger" id="bell-badge" style="display:none;">0</span>
+                    </button>
+                </div>
+                <!-- Theme Toggle Button -->
+                <div class="theme-toggle-wrapper">
+                    <button type="button" class="theme-toggle-btn" id="theme-toggle-btn" title="Switch to Light Mode" aria-label="Switch to Light Mode">
+                        <span class="theme-icon sun-icon">☀️</span>
+                        <span class="theme-icon moon-icon">🌙</span>
+                        <span class="theme-label" id="theme-toggle-label">Dark Mode</span>
+                    </button>
+                </div>
+                <div class="user-profile">
+                    <div class="avatar">OP</div>
+                    <span class="username">Operator Console</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- KPI STRIP -->
+        <section class="kpi-strip">
+            <div class="kpi-card">
+                <span class="kpi-label">ACTIVE NODES</span>
+                <div class="kpi-body">
+                    <span class="kpi-value" id="kpi-active-nodes">20 / 20</span>
+                    <span class="kpi-status status-green">100% Online</span>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">HIGH-RISK ZONES</span>
+                <div class="kpi-body">
+                    <span class="kpi-value" id="kpi-risk-zones">02</span>
+                    <span class="kpi-status status-red" id="kpi-risk-zones-status">Immediate attention</span>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">ANOMALIES TODAY</span>
+                <div class="kpi-body">
+                    <span class="kpi-value" id="kpi-anomalies">07</span>
+                    <span class="kpi-status status-amber" id="kpi-anomalies-status">ML triggers active</span>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">SYSTEM HEALTH</span>
+                <div class="kpi-body">
+                    <span class="kpi-value">99.7%</span>
+                    <span class="kpi-status status-green">Operational</span>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">LAST SYNC</span>
+                <div class="kpi-body">
+                    <span class="kpi-value" id="kpi-sync-sec">1.2s</span>
+                    <span class="kpi-status status-green">Polling / Sync</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- WORKSPACE CONTENT AREA -->
+        <div class="workspace-content">
+
+            <!-- ==========================================
+                 TAB 1: LIVE MONITORING
+                 ========================================== -->
+            <div id="view-live" class="tab-view active">
+                <div class="live-layout">
+                    <!-- Left: Hero Map -->
+                    <div class="map-container-wrapper">
+                        <div class="panel-header">
+                            <div class="panel-title-group">
+                                <span class="panel-eyebrow">GEOSPATIAL INTELLIGENCE</span>
+                                <h3>Mine Surface Network & Deformation Zones</h3>
+                            </div>
+                            <div class="map-controls-group">
+                                <span class="live-tag">● LIVE</span>
+                                <div class="map-legend">
+                                    <span class="legend-item"><span class="legend-dot bg-green"></span>Normal</span>
+                                    <span class="legend-item"><span class="legend-dot bg-amber"></span>Warning</span>
+                                    <span class="legend-item"><span class="legend-dot bg-red"></span>Critical</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="map"></div>
+                    </div>
+
+                    <!-- Right: Selected Node Sidebar -->
+                    <aside class="selected-node-sidebar">
+                        <div class="panel-header">
+                            <span class="panel-eyebrow">NODE TELEMETRY</span>
+                            <h3 id="sidebar-node-title">No Node Selected</h3>
+                        </div>
+                        
+                        <div id="node-info-content">
+                            <div class="empty-node-state">
+                                <div class="empty-icon">⌖</div>
+                                <p>Select an underground or crack node on the GIS map to inspect telemetry, ML contribution, and safety procedures.</p>
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+
+                <!-- Live Monitoring Lower Grid -->
+                <div class="lower-layout-grid">
+                    <!-- Deformation Trend Chart -->
+                    <div class="chart-panel card">
+                        <div class="panel-header flex-header">
+                            <div class="panel-title-group">
+                                <span class="panel-eyebrow">TIME-SERIES TELEMETRY</span>
+                                <h3>Deformation & Sensor Trends</h3>
+                            </div>
+                            <div class="chart-filters">
+                                <select id="chart-metric-select" class="custom-select-small">
+                                    <option value="risk_score">Risk Score</option>
+                                    <option value="tilt">Tilt Vector Magnitude</option>
+                                    <option value="vibration">Vibration</option>
+                                    <option value="displacement">Displacement (mm)</option>
+                                </select>
+                                <div class="time-range-group">
+                                    <button class="range-btn active" data-range="1h">1H</button>
+                                    <button class="range-btn" data-range="6h">6H</button>
+                                    <button class="range-btn" data-range="24h">24H</button>
+                                    <button class="range-btn" data-range="7d">7D</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chart-wrapper">
+                            <canvas id="liveTrendChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Risk Zones Summary -->
+                    <div class="risk-zones-panel card">
+                        <div class="panel-header">
+                            <span class="panel-eyebrow">SPATIAL CORRELATION</span>
+                            <h3>Active Deformation Risk Zones</h3>
+                        </div>
+                        <div class="risk-zones-list" id="active-zones-list">
+                            <div class="empty-list-state">No spatial anomalies detected. Network shows normal background noise.</div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Alerts Panel -->
+                    <div class="alerts-panel card">
+                        <div class="panel-header">
+                            <span class="panel-eyebrow">EVENT LOGGER</span>
+                            <h3>Recent System Anomalies</h3>
+                        </div>
+                        <div class="alerts-list" id="recent-alerts-container">
+                            <div class="empty-list-state">No active safety warnings.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 2: HISTORICAL ANALYSIS
+                 ========================================== -->
+            <div id="view-history" class="tab-view hidden">
+                <div class="history-page card">
+                    <div class="panel-header">
+                        <span class="panel-eyebrow">CHRONOLOGICAL RETRIEVAL</span>
+                        <h3>Historical Subsidence Queries</h3>
+                    </div>
+                    <form class="history-query-form" id="history-form">
+                        <div class="form-group">
+                            <label>Primary Node</label>
+                            <select id="hist-primary-node" class="custom-select">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Compare With</label>
+                            <select id="hist-compare-node" class="custom-select">
+                                <option value="none">-- None --</option>
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Metric</label>
+                            <select id="hist-metric" class="custom-select">
+                                <option value="risk_score">Risk Score</option>
+                                <option value="tilt">Tilt Vector</option>
+                                <option value="vibration">Vibration</option>
+                                <option value="displacement">Displacement (mm)</option>
+                                <option value="battery">Battery Life</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Timeframe</label>
+                            <select id="hist-timeframe" class="custom-select">
+                                <option value="1h">Last Hour</option>
+                                <option value="6h">Last 6 Hours</option>
+                                <option value="24h" selected>Last 24 Hours</option>
+                                <option value="7d">Last 7 Days</option>
+                            </select>
+                        </div>
+                        <div class="form-group button-group">
+                            <button type="button" class="btn btn-primary" id="btn-run-query">Run Historical Query</button>
+                        </div>
+                    </form>
+
+                    <div class="query-results-wrapper hidden" id="history-results">
+                        <div class="historical-chart-container">
+                            <canvas id="historicalChart"></canvas>
+                        </div>
+                        <div class="results-controls">
+                            <button class="btn btn-secondary" type="button" id="export-csv">Export Raw Readings (CSV)</button>
+                            <button class="btn btn-secondary" type="button" id="export-pdf">Generate PDF Engineering Report</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 3: SENSOR NETWORK
+                 ========================================== -->
+            <div id="view-network" class="tab-view hidden">
+                <div class="network-page card">
+                    <div class="panel-header flex-header">
+                        <div class="panel-title-group">
+                            <span class="panel-eyebrow">NODE ADMINISTRATION</span>
+                            <h3>Distributed Sensor Node Registry</h3>
+                        </div>
+                        <div class="table-filters">
+                            <button class="filter-chip active" data-filter="all">All Sensors</button>
+                            <button class="filter-chip" data-filter="ground">Underground</button>
+                            <button class="filter-chip" data-filter="crack">Crack / Displacement</button>
+                            <button class="filter-chip" data-filter="high">Critical</button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="industrial-table" id="sensor-registry-table">
+                            <thead>
+                                <tr>
+                                    <th>NODE ID</th>
+                                    <th>TYPE</th>
+                                    <th>STATUS</th>
+                                    <th>RISK</th>
+                                    <th>BATTERY</th>
+                                    <th>LAST UPDATE</th>
+                                    <th>LINK</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 4: RISK & ALERTS
+                 ========================================== -->
+            <div id="view-alerts" class="tab-view hidden">
+                <div class="alerts-page card">
+                    <div class="panel-header">
+                        <span class="panel-eyebrow">SAFETY LOGS</span>
+                        <h3>System Anomalies & Risk Triggers</h3>
+                    </div>
+                    <div class="alerts-table-wrapper">
+                        <table class="industrial-table" id="safety-logs-table">
+                            <thead>
+                                <tr>
+                                    <th>Severity</th>
+                                    <th>Source Node</th>
+                                    <th>Type</th>
+                                    <th>Event Timestamp</th>
+                                    <th>Trigger Level</th>
+                                    <th>Contributing Flags</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="safety-logs-tbody">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 5: RISK ZONES
+                 ========================================== -->
+            <div id="view-zones" class="tab-view hidden">
+                <div class="zones-page card">
+                    <div class="panel-header">
+                        <span class="panel-eyebrow">CORRELATION MAP</span>
+                        <h3>Subsidence Contour Risk Zones</h3>
+                    </div>
+                    <div class="zones-dashboard-grid" id="zones-details-grid">
+                        <!-- Loaded dynamically based on node spatial cluster logic -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 6: AI ANALYSIS (TWO-TIER ARCHITECTURE)
+                 ========================================== -->
+            <div id="view-ai" class="tab-view hidden">
+                <div class="ai-page card">
+                    <div class="panel-header">
+                        <div class="panel-title-group">
+                            <span class="panel-eyebrow">TWO-TIER INTELLIGENCE ARCHITECTURE</span>
+                            <h3>Dual-Layer AI: Local Offline ML (Safety Critical) &amp; Asynchronous Historical LLM Intelligence</h3>
+                        </div>
+                    </div>
+
+                    <!-- Safety Governance Callout Banner -->
+                    <div class="ai-safety-banner">
+                        <div class="safety-banner-icon">🛡️</div>
+                        <div class="safety-banner-text">
+                            <strong>SAFETY ARCHITECTURE INVARIANT:</strong>
+                            <span>Real-time anomaly detection, risk classification, and emergency siren activations are executed <strong>100% locally and deterministically</strong> by the Offline Edge ML Engine without Internet dependency. The AI/LLM layer operates strictly outside the critical real-time safety path to provide long-term trend analysis, risk progression modeling, and operator-friendly engineering reports.</span>
+                        </div>
+                    </div>
+
+                    <!-- Two-Tier Comparison Grid -->
+                    <div class="ai-tiers-grid">
+                        <!-- TIER 1 -->
+                        <div class="tier-card tier-realtime">
+                            <div class="tier-badge-row">
+                                <span class="tier-pill tier-pill-green">● TIER 1: REAL-TIME SAFETY PATH (OFFLINE)</span>
+                                <span class="tier-latency">&lt; 1.5 ms Latency</span>
+                            </div>
+                            <h4>Local Edge ML Anomaly Engine</h4>
+                            <p>Processes incoming live telemetry streams directly on gateway hardware. Performs continuous multi-variate anomaly detection, spatial clustering, and immediate hazard alerts without cloud reliance.</p>
+                            
+                            <div class="tier-spec-list">
+                                <div class="spec-row">
+                                    <span>Core Algorithm:</span>
+                                    <strong>Isolation Forest (Scikit-Learn)</strong>
+                                </div>
+                                <div class="spec-row">
+                                    <span>Execution Locality:</span>
+                                    <strong>Edge Gateway / Local SQLite Core</strong>
+                                </div>
+                                <div class="spec-row">
+                                    <span>Internet Required:</span>
+                                    <strong class="text-green">No (100% Offline Survivable)</strong>
+                                </div>
+                                <div class="spec-row">
+                                    <span>Critical Safety Path:</span>
+                                    <strong class="text-green">YES — Sole Emergency Decision-Maker</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TIER 2 -->
+                        <div class="tier-card tier-strategic">
+                            <div class="tier-badge-row">
+                                <span class="tier-pill tier-pill-blue">◈ TIER 2: ASYNCHRONOUS HISTORICAL LAYER</span>
+                                <span class="tier-latency">Asynchronous Advisory</span>
+                            </div>
+                            <h4>Strategic AI / LLM Intelligence Layer</h4>
+                            <p>Analyzes accumulated historical time-series datasets over multi-hour and multi-day horizons. Discovers long-term subsidence trajectories, correlates cross-panel strain shifts, and synthesizes natural language operator insights.</p>
+                            
+                            <div class="tier-spec-list">
+                                <div class="spec-row">
+                                    <span>Primary Function:</span>
+                                    <strong>Historical Trend &amp; Progression Analysis</strong>
+                                </div>
+                                <div class="spec-row">
+                                    <span>Execution Mode:</span>
+                                    <strong>Asynchronous (Non-Blocking)</strong>
+                                </div>
+                                <div class="spec-row">
+                                    <span>Output Format:</span>
+                                    <strong>Operator Briefs &amp; DGMS Engineering Memos</strong>
+                                </div>
+                                <div class="spec-row">
+                                    <span>Critical Safety Path:</span>
+                                    <strong style="color: #93C5FD;">NO — Advisory Intelligence Only</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Strategic AI Insights Synthesizer -->
+                    <div class="ai-synthesis-section">
+                        <div class="synthesis-header">
+                            <div>
+                                <span class="panel-eyebrow">TIER 2 ASYNCHRONOUS HISTORICAL ANALYSIS</span>
+                                <h4>Geotechnical Risk Progression &amp; Operator Insights Brief</h4>
+                            </div>
+                            <button type="button" class="btn btn-primary" id="btn-generate-ai-brief">
+                                <span>⚡</span>
+                                <span>Synthesize Historical AI Assessment</span>
+                            </button>
+                        </div>
+
+                        <div class="ai-insights-result-box" id="ai-insights-container">
+                            <div class="insights-placeholder">
+                                <span class="placeholder-icon">◈</span>
+                                <p>Click <strong>"Synthesize Historical AI Assessment"</strong> to run Tier-2 multi-node historical trend analysis and generate a natural language engineering brief across all monitored mine panels.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Local Feature Explainability -->
+                    <div class="ai-explainability-footer-card">
+                        <div class="panel-header">
+                            <span class="panel-eyebrow">TIER 1 EDGE ML EXPLAINABILITY</span>
+                            <h4>Real-Time Feature Attribution (Selected Node)</h4>
+                        </div>
+                        <div class="ai-contributions-box" id="ai-explainability-details">
+                            <div class="empty-state">Select a node in Live Monitoring to display exact AI explainability factors.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 7: REPORTS
+                 ========================================== -->
+            <div id="view-reports" class="tab-view hidden">
+                <div class="reports-page card">
+                    <div class="panel-header">
+                        <span class="panel-eyebrow">AUDITING & COMPLIANCE</span>
+                        <h3>Engineering Reports & Regulatory Exports</h3>
+                    </div>
+                    <div class="reports-container">
+                        <div class="report-box">
+                            <h4>Daily Safety Summary</h4>
+                            <p>Export daily telemetry readings, peak subsidence vectors, and safety log anomalies for internal engineering validation.</p>
+                            <button class="btn btn-secondary" type="button">Generate Daily Report (PDF)</button>
+                        </div>
+                        <div class="report-box">
+                            <h4>DGMS Regulatory Export</h4>
+                            <p>Export pre-formatted CSV/Excel data compliant with Directorate General of Mines Safety (DGMS) reporting guidelines.</p>
+                            <button class="btn btn-secondary" type="button">Export DGMS Template (CSV)</button>
+                        </div>
+                        <div class="report-box">
+                            <h4>Historical Event Log</h4>
+                            <p>Export a full chronological log of all medium and high-risk events detected since deployment.</p>
+                            <button class="btn btn-secondary" type="button">Download Event History (JSON)</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 8: SYSTEM HEALTH
+                 ========================================== -->
+            <div id="view-health" class="tab-view hidden">
+                <div class="health-page card">
+                    <div class="panel-header">
+                        <span class="panel-eyebrow">SYSTEM DIAGNOSTICS</span>
+                        <h3>Hardware Connectivity & Data Pipelines</h3>
+                    </div>
+                    <div class="health-grid">
+                        <div class="health-status-card">
+                            <h4>Pipeline Health Indicators</h4>
+                            <ul class="health-checklist">
+                                <li>
+                                    <span>Sensor Network Core</span>
+                                    <strong class="text-green">● Healthy</strong>
+                                </li>
+                                <li>
+                                    <span>Simulation Thread</span>
+                                    <strong class="text-green">● Healthy (Emulating)</strong>
+                                </li>
+                                <li>
+                                    <span>Local SQLite DB</span>
+                                    <strong class="text-green">● Healthy</strong>
+                                </li>
+                                <li>
+                                    <span>Isolation Forest ML Engine</span>
+                                    <strong class="text-green">● Running</strong>
+                                </li>
+                                <li>
+                                    <span>Edge Synchronization Pipeline</span>
+                                    <strong class="text-green">● Online</strong>
+                                </li>
+                            </ul>
+                        </div>
+                        <div class="health-status-card">
+                            <h4>Database & Memory Capacity</h4>
+                            <div class="db-stats-wrapper">
+                                <div class="stat-row">
+                                    <span>Database Filename:</span>
+                                    <strong>terraveil.db</strong>
+                                </div>
+                                <div class="stat-row">
+                                    <span>Database size:</span>
+                                    <strong id="health-db-size">Checking...</strong>
+                                </div>
+                                <div class="stat-row">
+                                    <span>Total readings stored:</span>
+                                    <strong id="health-db-readings">Counting...</strong>
+                                </div>
+                                <div class="stat-row">
+                                    <span>Engine Latency:</span>
+                                    <strong>&lt; 2.2ms</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==========================================
+                 TAB 9: SETTINGS
+                 ========================================== -->
+            <div id="view-settings" class="tab-view hidden">
+                <div class="settings-page card">
+                    <div class="panel-header">
+                        <span class="panel-eyebrow">CONSOLE MANAGEMENT</span>
+                        <h3>Local Monitoring Configurations</h3>
+                    </div>
+                    <div class="settings-form">
+                        <div class="form-row">
+                            <div class="form-group-full">
+                                <label>Safety Alert Threshold (ML Score)</label>
+                                <input type="range" class="slider-input" min="30" max="90" value="70" id="settings-threshold-slider">
+                                <span class="slider-value">Current Trigger: <strong id="slider-val-display">70</strong></span>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group-full">
+                                <label>Operator Response Notification Email</label>
+                                <input type="email" class="text-input" value="safety-room@chasnalla.co.in" readonly>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group-full">
+                                <button type="button" class="btn btn-primary" id="btn-save-settings">Save System Settings</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+</div>
+
+<!-- ==================================================
+     FULL SCREEN RED ALERT OVERLAY (65% TRANSPARENCY)
+     =================================================== -->
+<div id="red-alert-overlay" class="red-alert-overlay hidden" aria-modal="true" role="alertdialog">
+    <div class="red-alert-strobe"></div>
+    <div class="red-alert-content-wrapper">
+        <div class="red-alert-modal">
+            <div class="red-alert-header">
+                <div class="alert-beacon-icon">
+                    <span class="siren-light">🚨</span>
+                </div>
+                <div class="alert-title-block">
+                    <h1 class="red-alert-title">RED ALERT</h1>
+                    <span class="red-alert-subtitle">EMERGENCY SIREN ACTIVATION — ALL MINE ZONES</span>
+                </div>
+            </div>
+
+            <div class="red-alert-body">
+                <div class="emergency-banner">
+                    <div class="emergency-headline">
+                        <strong>⚠️ CRITICAL MINE SUBSIDENCE HAZARD DETECTED ⚠️</strong>
+                    </div>
+                    <p class="emergency-message" id="overlay-emergency-msg">
+                        EMERGENCY COMMAND INITIATED: ALL 8 MINE SIRENS ACTIVATED. CRITICAL GROUND DISPLACEMENT DETECTED. IMMEDIATE EVACUATION ORDER FOR PANEL EAST AND UNDERGROUND WORKINGS.
+                    </p>
+                </div>
+
+                <div class="sirens-grid-status">
+                    <div class="sirens-header">
+                        <span>ACTIVE SIREN NETWORK (8/8 ONLINE):</span>
+                        <span class="siren-pulse-badge">● SIRENS BROADCASTING</span>
+                    </div>
+                    <div class="siren-chips-container" id="overlay-sirens-container">
+                        <div class="siren-chip active"><span class="chip-dot"></span> Surface Klaxon 1</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Surface Klaxon 2</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Shaft 1 (120m)</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Shaft 2 (250m)</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Shaft 3 Haulage</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Shaft 4 Return</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Panel East Array</div>
+                        <div class="siren-chip active"><span class="chip-dot"></span> Conveyor Siren</div>
+                    </div>
+                </div>
+
+                <div class="alert-telemetry-strip">
+                    <div class="telemetry-pill">
+                        <span>Incident Time:</span>
+                        <strong id="overlay-alert-time">--:--:--</strong>
+                    </div>
+                    <div class="telemetry-pill">
+                        <span>Active Duration:</span>
+                        <strong id="overlay-alert-duration">00:00</strong>
+                    </div>
+                    <div class="telemetry-pill">
+                        <span>Protocol:</span>
+                        <strong>DGMS Level-3 Emergency</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="red-alert-footer">
+                <button type="button" class="btn-acknowledge-alert" id="btn-acknowledge-alert">
+                    <span class="btn-ack-icon">✓</span>
+                    <span>ACKNOWLEDGE &amp; RESET ALERT (STOP SIRENS)</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Leaflet GIS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Application Control Logic -->
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

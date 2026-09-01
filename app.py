@@ -118,7 +118,7 @@ def ai_architecture():
     Returns the formal two-tier AI architecture specification.
     """
     return jsonify({
-        "system": "SubSentry AI Safety Architecture",
+        "system": "TerraVeil AI Safety Architecture",
         "tier_1_realtime_safety": {
             "name": "Local Edge ML Anomaly Engine",
             "locality": "Edge Gateway / Microserver (100% Offline)",

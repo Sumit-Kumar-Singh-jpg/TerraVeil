@@ -446,7 +446,7 @@ While the current release uses high-fidelity simulation for hackathon demonstrat
 
 ## 🤖 AI Architecture: Two-Tier Intelligence Model
 
-SubSentry operates on a strict **Two-Tier Intelligence Architecture** separating real-time deterministic safety control from asynchronous strategic analytics.
+TerraVeil operates on a strict **Two-Tier Intelligence Architecture** separating real-time deterministic safety control from asynchronous strategic analytics.
 
 ```text
   ┌────────────────────────────────────────────────────────────────────────────────────────┐

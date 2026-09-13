@@ -18,6 +18,8 @@
     
     <!-- Application CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/digital-twin.css') }}">
+    <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}</script>
 </head>
 <body>
 
@@ -51,6 +53,10 @@
                 <a href="#" class="nav-link" data-target="view-history">
                     <span class="nav-icon">◷</span>
                     <span>Historical Analysis</span>
+                </a>
+                <a href="?view=twin" class="nav-link" data-target="view-twin">
+                    <span class="nav-icon">⬡</span>
+                    <span>Digital Twin</span>
                 </a>
                 <a href="#" class="nav-link" data-target="view-network">
                     <span class="nav-icon">⌁</span>
@@ -301,6 +307,7 @@
             <!-- ==========================================
                  TAB 2: HISTORICAL ANALYSIS
                  ========================================== -->
+            {% include 'digital_twin.html' %}
             <div id="view-history" class="tab-view hidden">
                 <div class="history-page card">
                     <div class="panel-header">
@@ -757,5 +764,6 @@
 
 <!-- Application Control Logic -->
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/digital-twin.js') }}"></script>
 </body>
 </html>

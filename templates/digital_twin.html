@@ -1,0 +1,53 @@
+<div id="view-twin" class="tab-view hidden">
+    <div class="twin-heading">
+        <div><span class="twin-eyebrow">SPATIAL MONITORING</span><h1>Mine digital twin</h1><p>Your mine, connected to the host telemetry.</p></div>
+        <div class="twin-source-switch" role="group" aria-label="Digital twin data source">
+            <button type="button" id="twin-host" class="selected">Host telemetry</button>
+            <button type="button" id="twin-demo">Demo replay</button>
+        </div>
+    </div>
+    <div class="twin-workbench">
+        <div class="twin-stage" id="twin-stage">
+            <canvas id="twin-canvas" aria-label="Interactive 3D mine. Drag to orbit, scroll to zoom, click a sensor to inspect." tabindex="0"></canvas>
+            <div class="twin-status-strip"><span id="twin-source-label">HOST TELEMETRY</span><span id="twin-link" role="status">Connecting</span></div>
+            <div class="twin-loading" id="twin-loading" role="status"><span class="twin-spinner"></span><strong>Opening the TerraVeil mine</strong><span id="twin-load-detail">Loading the existing Blender environment…</span></div>
+            <div class="twin-camera-toolbar" role="group" aria-label="Camera views">
+                <button type="button" data-twin-camera="overview" class="selected">Overview</button><button type="button" data-twin-camera="surface">Sensor field</button><button type="button" data-twin-camera="underground">Underground</button><button type="button" id="twin-tour">Play camera tour</button>
+            </div>
+            <div class="twin-scene-caption"><span class="twin-dot"></span><strong id="twin-system-state">Waiting for state</strong><span id="twin-scene-metrics"></span></div>
+            <div class="twin-gesture">Drag to orbit · Scroll to zoom · Select a sensor</div>
+        </div>
+        <aside class="twin-inspector">
+            <div class="twin-inspector-title"><span>NODE INSPECTOR</span><span id="twin-node-count">0 nodes</span></div>
+            <label class="twin-field-label" for="twin-node-select">Monitoring node</label>
+            <select id="twin-node-select" aria-label="Select monitoring node"><option value="">Select a sensor</option></select>
+            <div class="twin-node-heading"><strong id="twin-node-id">—</strong><span id="twin-node-risk" class="twin-risk-pill">NO DATA</span></div>
+            <p id="twin-node-type" class="twin-subtle">Click a marker in the mine to inspect its readings.</p>
+            <dl class="twin-readings">
+                <div><dt>Risk score</dt><dd id="twin-reading-risk">—</dd></div>
+                <div><dt>Tilt X / Y</dt><dd id="twin-reading-tilt">—</dd></div>
+                <div><dt>Vibration</dt><dd id="twin-reading-vibration">—</dd></div>
+                <div><dt>Crack opening</dt><dd id="twin-reading-crack">—</dd></div>
+                <div><dt>Battery</dt><dd id="twin-reading-battery">—</dd></div>
+                <div><dt>Connectivity</dt><dd id="twin-reading-link">—</dd></div>
+            </dl>
+            <button type="button" id="twin-focus-node" class="twin-wide-button">Focus selected node</button>
+            <div class="twin-display-controls">
+                <span class="twin-field-label">Scene layers</span>
+                <label><input type="checkbox" id="twin-forest" checked> Forest</label>
+                <label><input type="checkbox" id="twin-risk" checked> Risk regions</label>
+                <label><input type="checkbox" id="twin-markers" checked> Sensor markers</label>
+                <label for="twin-gain">Crack display gain <output id="twin-gain-value">25×</output></label>
+                <input type="range" id="twin-gain" min="1" max="50" value="25" step="1">
+            </div>
+            <div class="twin-sirens"><span class="twin-field-label">HOST SIRENS</span><strong id="twin-siren-status">Standby</strong><div id="twin-siren-list"></div></div>
+        </aside>
+    </div>
+    <div class="twin-replay hidden" id="twin-replay">
+        <button type="button" id="twin-play" aria-label="Play demo">Play demo</button>
+        <input id="twin-time" type="range" min="0" max="44" step="0.25" value="0" aria-label="Demo time">
+        <output id="twin-time-label">0:00 / 0:44</output>
+        <span>Demo only · Host alerts are unchanged</span>
+    </div>
+    <div class="twin-footer"><span><i class="twin-legend-dot low"></i> Low <i class="twin-legend-dot medium"></i> Medium <i class="twin-legend-dot high"></i> High <i class="twin-legend-dot offline"></i> Stale / no data</span><span>Illustrative site registration and settlement · Gauge readings stay in mm</span></div>
+</div>

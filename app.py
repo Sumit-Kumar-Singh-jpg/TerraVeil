@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from datetime import datetime
 
 from database import (
@@ -9,6 +9,7 @@ from database import (
 )
 
 from simulator import start_simulator
+from digital_twin import build_twin_state
 
 
 app = Flask(__name__)
@@ -46,6 +47,31 @@ def nodes():
 @app.route("/api/readings/latest")
 def latest_readings():
     return jsonify(get_latest_readings())
+
+
+@app.route("/api/twin/state")
+def twin_state():
+    """Read-only visualization state; existing alert endpoints remain authoritative."""
+    response = jsonify(build_twin_state(get_nodes(), get_latest_readings(), alert_state))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/twin/assets/<filename>')
+def twin_asset(filename):
+    """Serve the exported model with precompressed transfer when supported."""
+    if filename not in ('mine.glb', 'scene.json'):
+        return jsonify(error='Unknown twin asset'), 404
+    compressed = request.accept_encodings['gzip'] > 0
+    response = send_from_directory(
+        app.static_folder + '/models/terraveil', filename + ('.gz' if compressed else ''),
+        mimetype='model/gltf-binary' if filename.endswith('.glb') else 'application/json',
+        max_age=3600,
+    )
+    if compressed:
+        response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Vary'] = 'Accept-Encoding'
+    return response
 
 
 @app.route("/api/history/<node_id>")

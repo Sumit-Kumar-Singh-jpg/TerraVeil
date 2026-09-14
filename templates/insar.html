@@ -1,0 +1,39 @@
+<section id="view-insar" class="tab-view hidden" aria-labelledby="insar-title">
+    <div class="insar-heading">
+        <div><span class="insar-eyebrow">SATELLITE OBSERVATIONS</span><h2 id="insar-title">Jharia · InSAR terrain</h2><p>Explore the measured terrain and historical radar line-of-sight velocity.</p></div>
+        <span class="insar-badge">HISTORICAL DATA · READ ONLY</span>
+    </div>
+    <div class="insar-summary" aria-label="Dataset summary">
+        <div><span>Observation period</span><strong id="insar-period">Loading…</strong></div>
+        <div><span>Ground sampling</span><strong id="insar-resolution">—</strong></div>
+        <div><span>Valid LOS samples</span><strong id="insar-coverage">—</strong></div>
+        <div><span>Median LOS velocity</span><strong id="insar-median">—</strong></div>
+    </div>
+    <div class="insar-layout">
+        <div class="insar-map-wrap">
+            <div class="insar-toolbar">
+                <label>Map layer <select id="insar-layer"><option value="velocity">Signed LOS velocity</option><option value="height">Terrain elevation</option><option value="coherence">Temporal coherence</option></select></label>
+                <div><button id="insar-oblique" type="button">3D view</button><button id="insar-top" type="button">Top view</button><button id="insar-reset" type="button">Reset</button></div>
+            </div>
+            <div id="insar-stage" aria-label="Interactive Jharia terrain. Drag to orbit, scroll to zoom, right-drag to pan. Click a point to inspect." tabindex="0">
+                <div id="insar-loading" role="status"><strong>Preparing the terrain</strong><span>Loading the local InSAR dataset…</span></div>
+                <div class="insar-map-caption"><span id="insar-crs">Georeferenced terrain</span><span id="insar-relief-caption">Relief 8×</span></div>
+                <div class="insar-legend"><strong id="insar-legend-title">LOS velocity · mm/year</strong><div id="insar-gradient"></div><div class="insar-legend-values"><span id="insar-low">—</span><span id="insar-mid">0</span><span id="insar-high">—</span></div><small id="insar-color-note">Signed radar-direction rate</small><small>Grey = no valid value for this layer</small></div>
+            </div>
+            <div class="insar-map-footer"><span>Drag to orbit · scroll to zoom · right-drag to pan · click to inspect</span><span id="insar-grid-size"></span></div>
+        </div>
+        <aside class="insar-inspector" aria-label="Map controls and point inspection">
+            <h3>Terrain display</h3>
+            <label class="insar-relief">Vertical exaggeration <output id="insar-relief-value" for="insar-relief">8×</output><input id="insar-relief" type="range" min="1" max="20" step="1" value="8"></label>
+            <p class="insar-help">1× shows true proportions. Elevation values always remain in metres.</p>
+            <label class="insar-checkbox"><input type="checkbox" id="insar-shade" checked> Terrain shading</label>
+            <hr><h3>Inspect a sample</h3><p class="insar-help">Select the surface or enter a grid location. Rows and columns start at zero.</p>
+            <form id="insar-pixel-form"><label>Row<input id="insar-row" type="number" min="0" value="0" required></label><label>Column<input id="insar-col" type="number" min="0" value="0" required></label><button type="submit">Inspect</button></form>
+            <div id="insar-point-status" role="status">Select a terrain point</div>
+            <dl id="insar-point"><dt>LOS velocity</dt><dd id="insar-point-velocity">—</dd><dt>Velocity fit std.</dt><dd id="insar-point-std">—</dd><dt>Elevation</dt><dd id="insar-point-height">—</dd><dt>Coherence</dt><dd id="insar-point-coherence">—</dd><dt>Latitude</dt><dd id="insar-point-lat">—</dd><dt>Longitude</dt><dd id="insar-point-lon">—</dd><dt>Easting</dt><dd id="insar-point-east">—</dd><dt>Northing</dt><dd id="insar-point-north">—</dd></dl>
+            <p class="insar-help">Fit standard deviation is supplied by the velocity product; it does not represent all measurement uncertainty.</p>
+        </aside>
+    </div>
+    <div class="insar-data-notes"><div><h3>How to read this map</h3><p>Colours show signed motion along the radar line of sight. They are not vertical subsidence or live risk levels. The elevation surface comes from the DEM; it is not animated from velocity.</p><p id="insar-range"></p></div><div><h3>Dataset quality</h3><ul id="insar-warnings"></ul></div></div>
+    <details class="insar-provenance"><summary>Dataset provenance and processing details</summary><p id="insar-provenance-text"></p><ul id="insar-files"></ul><a href="/api/insar/manifest.json" target="_blank" rel="noopener">Open dataset manifest</a></details>
+</section>

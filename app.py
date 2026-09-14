@@ -21,6 +21,8 @@ from digital_twin import build_twin_state
 
 
 app = Flask(__name__)
+from insar import insar
+app.register_blueprint(insar)
 app.config["MAX_CONTENT_LENGTH"] = 8192
 init_db()
 

@@ -1,0 +1,4 @@
+# Offline asset preparation only; the running webapp does not import these.
+numpy>=1.26,<3
+h5py>=3.10,<4
+pyproj>=3.6,<4

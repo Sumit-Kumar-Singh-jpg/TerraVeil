@@ -1,3 +1,5 @@
+> InSAR 3D map: open **InSAR 3D Map** in the sidebar or `/?view=insar`. See [docs/INSAR.md](docs/INSAR.md) for the real Jharia dataset, interpretation and rebuilding.
+
 > Hardware integration: see [HARDWARE.md](HARDWARE.md) for the selected LoRa → HOST-01 → USB/COM7 path, setup, optional buffered receiver firmware and acceptance checks. Earlier demo architecture descriptions below predate this integration.
 
 # TerraVeil

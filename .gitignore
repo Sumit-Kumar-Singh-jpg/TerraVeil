@@ -6,6 +6,9 @@ __pycache__/
 # SQLite Databases (Auto-generated on startup by database.py)
 *.db
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Virtual Environments
 venv/

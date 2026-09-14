@@ -19,6 +19,7 @@
     <!-- Application CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/digital-twin.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/insar.css') }}">
     <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -57,6 +58,10 @@
                 <a href="?view=twin" class="nav-link" data-target="view-twin">
                     <span class="nav-icon">⬡</span>
                     <span>Digital Twin</span>
+                </a>
+                <a href="?view=insar" class="nav-link" data-target="view-insar">
+                    <span class="nav-icon">▱</span>
+                    <span>InSAR 3D Map</span>
                 </a>
                 <a href="#" class="nav-link" data-target="view-network">
                     <span class="nav-icon">⌁</span>
@@ -309,6 +314,7 @@
                  TAB 2: HISTORICAL ANALYSIS
                  ========================================== -->
             {% include 'digital_twin.html' %}
+            {% include 'insar.html' %}
             <div id="view-history" class="tab-view hidden">
                 <div class="history-page card">
                     <div class="panel-header">
@@ -745,5 +751,6 @@
 <!-- Application Control Logic -->
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/digital-twin.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/insar.js') }}"></script>
 </body>
 </html>

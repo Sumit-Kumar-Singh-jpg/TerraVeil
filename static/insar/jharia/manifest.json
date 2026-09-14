@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "title": "Jharia coalfield",
+  "generated_at": "2026-09-14T08:48:08.219209+00:00",
+  "grid": {
+    "rows": 419,
+    "columns": 576,
+    "x_first": 408160.0,
+    "y_first": 2643520.0,
+    "x_step": 80.0,
+    "y_step": -80.0,
+    "epsg": 32645,
+    "coordinate_convention": "Sample coordinate = FIRST + index \u00d7 STEP; no additional half-pixel offset.",
+    "bounds_wgs84": [
+      86.09776668636873,
+      23.598636525721698,
+      86.55069057290284,
+      23.90263552312989
+    ]
+  },
+  "period": {
+    "start": "20220102",
+    "end": "20260909",
+    "reference_date": "20220102"
+  },
+  "reference": {
+    "row": "377",
+    "column": "241",
+    "note": "Source REF_LAT/REF_LON are not assumed to be geographic; use the grid and reference row/column."
+  },
+  "units": {
+    "height": "m",
+    "velocity": "mm/year",
+    "velocity_source": "m/year",
+    "velocity_std": "mm/year"
+  },
+  "asset": {
+    "filename": "terrain-6286df9be11d3690.bin",
+    "bytes": 6757632,
+    "sha256": "6286df9be11d3690ec1cc893e198bbcfd5e0e188a7dd409ccd06bbda0f531a8e",
+    "format": "little-endian float32, row-major, interleaved",
+    "channels": [
+      "height_m",
+      "los_mm_year",
+      "coherence",
+      "longitude",
+      "latitude",
+      "velocity_std_mm_year",
+      "flags"
+    ],
+    "flags": {
+      "terrain": 1,
+      "velocity": 2,
+      "coherence": 4,
+      "land": 8,
+      "velocity_std": 16
+    }
+  },
+  "stats": {
+    "total_samples": 241344,
+    "terrain_samples": 241344,
+    "velocity_samples": 238727,
+    "elevation_min": 0.06031825393438339,
+    "elevation_max": 476.9289245605469,
+    "velocity_min": -238.90843987464905,
+    "velocity_max": 59.880319982767105,
+    "velocity_median": -22.608080878853798,
+    "color_limit_mm_year": 53.15108150243759,
+    "coherence_min": 1.0,
+    "coherence_max": 1.0
+  },
+  "masking": {
+    "velocity_nodata": "0.0",
+    "water_semantics": "1 = usable land, 0 = excluded",
+    "velocity_rule": "Finite non-NoData velocity and terrain, positive coherence <= 1, usable waterMask"
+  },
+  "sources": [
+    {
+      "file": "velocity_corrected.h5",
+      "dataset": "velocity",
+      "sha256": "e15946772b9bed7103a13870993e606fd9f9d1f98eb5b2b09ede928fa2e2881f"
+    },
+    {
+      "file": "inputs/geometryGeo.h5",
+      "dataset": "height",
+      "sha256": "552e79de2168829f3f6ce022c8bad1c20b9cdbbf63ee70012903dd59390ea41c"
+    },
+    {
+      "file": "temporalCoherence.h5",
+      "dataset": "temporalCoherence",
+      "sha256": "6dbf3c3852cee456aacbde9d6e63b9fa2459e19f47a99eaae40599ace601e6c1"
+    },
+    {
+      "file": "waterMask.h5",
+      "dataset": "waterMask",
+      "sha256": "a8fa2613b5aacfca4eb1e175c86969d2385cca074dba68593faa969de58385b7"
+    }
+  ],
+  "warnings": [
+    "LOS velocity is a historical radar-direction rate, not vertical settlement or a live alarm.",
+    "Positive temporal coherence is uniform; it cannot distinguish more reliable locations.",
+    "The supplied water mask is all land/usable. Water exclusion is uninformative; verify mask provenance."
+  ]
+}

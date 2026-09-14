@@ -107,10 +107,10 @@
                 <span class="status-dot dot-online"></span>
                 <div>
                     <strong>● LOCAL MODE</strong>
-                    <span>Simulation Active</span>
+                    <span id="sidebar-mode-status">Connecting</span>
                 </div>
             </div>
-            <span class="sys-version">SIMULATION MODE</span>
+            <span class="sys-version"><span class="data-source-label">CONNECTING</span></span>
         </div>
     </aside>
 
@@ -142,7 +142,7 @@
                         ● LOCAL MODE (SQLite + ML)
                     </span>
                     <span class="status-pill sim-badge">
-                        SIMULATION MODE
+                        <span class="data-source-label">CONNECTING</span>
                     </span>
                 </div>
                 <div class="sync-status">
@@ -170,33 +170,34 @@
         </header>
 
         <!-- KPI STRIP -->
+        <div style="padding:8px 16px"><label>Data source <select id="hardware-mode"><option value="REAL">REAL HARDWARE</option><option value="SIMULATION">SIMULATION</option></select></label><div id="hardware-health" role="status">Connecting to Mother Host…</div></div>
         <section class="kpi-strip">
             <div class="kpi-card">
                 <span class="kpi-label">ACTIVE NODES</span>
                 <div class="kpi-body">
-                    <span class="kpi-value" id="kpi-active-nodes">20 / 20</span>
-                    <span class="kpi-status status-green">100% Online</span>
+                    <span class="kpi-value" id="kpi-active-nodes">—</span>
+                    <span class="kpi-status status-green" id="kpi-active-status">UNCONFIRMED</span>
                 </div>
             </div>
             <div class="kpi-card">
                 <span class="kpi-label">HIGH-RISK ZONES</span>
                 <div class="kpi-body">
-                    <span class="kpi-value" id="kpi-risk-zones">02</span>
+                    <span class="kpi-value" id="kpi-risk-zones">—</span>
                     <span class="kpi-status status-red" id="kpi-risk-zones-status">Immediate attention</span>
                 </div>
             </div>
             <div class="kpi-card">
-                <span class="kpi-label">ANOMALIES TODAY</span>
+                <span class="kpi-label">ACTIVE ANOMALIES</span>
                 <div class="kpi-body">
-                    <span class="kpi-value" id="kpi-anomalies">07</span>
+                    <span class="kpi-value" id="kpi-anomalies">—</span>
                     <span class="kpi-status status-amber" id="kpi-anomalies-status">ML triggers active</span>
                 </div>
             </div>
             <div class="kpi-card">
                 <span class="kpi-label">SYSTEM HEALTH</span>
                 <div class="kpi-body">
-                    <span class="kpi-value">99.7%</span>
-                    <span class="kpi-status status-green">Operational</span>
+                    <span class="kpi-value" id="kpi-system-health">UNCONFIRMED</span>
+                    <span class="kpi-status status-green">Host status</span>
                 </div>
             </div>
             <div class="kpi-card">
@@ -604,28 +605,7 @@
                     <div class="health-grid">
                         <div class="health-status-card">
                             <h4>Pipeline Health Indicators</h4>
-                            <ul class="health-checklist">
-                                <li>
-                                    <span>Sensor Network Core</span>
-                                    <strong class="text-green">● Healthy</strong>
-                                </li>
-                                <li>
-                                    <span>Simulation Thread</span>
-                                    <strong class="text-green">● Healthy (Emulating)</strong>
-                                </li>
-                                <li>
-                                    <span>Local SQLite DB</span>
-                                    <strong class="text-green">● Healthy</strong>
-                                </li>
-                                <li>
-                                    <span>Isolation Forest ML Engine</span>
-                                    <strong class="text-green">● Running</strong>
-                                </li>
-                                <li>
-                                    <span>Edge Synchronization Pipeline</span>
-                                    <strong class="text-green">● Online</strong>
-                                </li>
-                            </ul>
+                            <div id="pipeline-health-details">Connecting…</div>
                         </div>
                         <div class="health-status-card">
                             <h4>Database & Memory Capacity</h4>
@@ -644,7 +624,7 @@
                                 </div>
                                 <div class="stat-row">
                                     <span>Engine Latency:</span>
-                                    <strong>&lt; 2.2ms</strong>
+                                    <strong>UNAVAILABLE</strong>
                                 </div>
                             </div>
                         </div>

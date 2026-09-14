@@ -1,3 +1,5 @@
+> Hardware integration: see [HARDWARE.md](HARDWARE.md) for the selected LoRa → HOST-01 → USB/COM7 path, setup, optional buffered receiver firmware and acceptance checks. Earlier demo architecture descriptions below predate this integration.
+
 # TerraVeil
 
 <p align="center">

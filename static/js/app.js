@@ -1,3 +1,7 @@
+let currentMode = null;
+let pollBusy = false;
+function fmt(value, digits=1) { return Number.isFinite(value) ? value.toFixed(digits) : 'UNAVAILABLE'; }
+
 // ==========================================================================
 // TerraVeil Industrial Control Room Logic (Warm Industrial Spec)
 // ==========================================================================
@@ -22,26 +26,6 @@ const map = L.map("map", {
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors"
 }).addTo(map);
-
-// Draw "PANEL EAST" mine geological boundary outline
-const panelEastBoundary = L.polygon([
-    [23.651, 86.446],
-    [23.663, 86.446],
-    [23.663, 86.464],
-    [23.651, 86.464]
-], {
-    color: '#3B82F6',     // Industrial Deep Blue
-    fillColor: '#3B82F6',
-    fillOpacity: 0.05,
-    weight: 1.5,
-    dashArray: '5, 5'
-}).addTo(map);
-
-panelEastBoundary.bindTooltip("PANEL EAST — Boundary limits", {
-    permanent: true,
-    direction: 'top',
-    className: 'boundary-tooltip'
-});
 
 // Stored map markers and connections
 const markers = {};
@@ -143,7 +127,7 @@ function applyTheme(theme) {
 }
 
 function getRiskColor(level) {
-    if (level === "HIGH") return "#EF4444"; // Strong Red
+    if (level === "HIGH" || level === "CRITICAL") return "#EF4444"; // Strong Red
     if (level === "MEDIUM") return "#F59E0B"; // Amber / Orange
     return "#10B981"; // Muted Green
 }
@@ -160,7 +144,7 @@ function getNodeIcon(type) {
 
 // Calculate Tilt Vector Magnitude
 function getTiltMagnitude(tx, ty) {
-    if (tx == null || ty == null) return 0;
+    if (tx == null || ty == null) return null;
     return Math.sqrt(tx * tx + ty * ty);
 }
 
@@ -178,43 +162,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
 // SPATIAL DEFORMATION CLUSTERING ALGORITHM
 // ==========================================================================
 function calculateSpatialClusters(nodes, readings) {
-    const abnormalNodes = nodes.filter(node => {
-        const rd = readings[node.node_id];
-        return rd && (rd.risk_level === "HIGH" || rd.risk_level === "MEDIUM");
-    });
-
-    const visited = new Set();
-    const clusters = [];
-
-    // Cluster abnormal nodes within 500m proximity
-    for (let node of abnormalNodes) {
-        if (visited.has(node.node_id)) continue;
-
-        const cluster = [];
-        const queue = [node];
-        visited.add(node.node_id);
-
-        while (queue.length > 0) {
-            const current = queue.shift();
-            cluster.push(current);
-
-            for (let other of abnormalNodes) {
-                if (visited.has(other.node_id)) continue;
-                
-                const dist = getDistance(current.latitude, current.longitude, other.latitude, other.longitude);
-                if (dist <= 500) { // 500 meters
-                    visited.add(other.node_id);
-                    queue.push(other);
-                }
-            }
-        }
-
-        if (cluster.length >= 2) {
-            clusters.push(cluster);
-        }
-    }
-
-    spatialClusters = clusters;
+    spatialClusters = (window.backendZones || []).map(zone => zone.node_ids.map(id => nodes.find(n => n.node_id === id)).filter(Boolean));
     updateDeformationOverlays();
     updateZonesUI();
 }
@@ -239,14 +187,10 @@ function updateDeformationOverlays() {
         const color = hasHigh ? "#EF4444" : "#F59E0B";
         const zoneName = `Risk Zone ${String.fromCharCode(65 + idx)}`;
 
-        const circle = L.circle([avgLat, avgLon], {
-            color: color,
-            fillColor: color,
-            fillOpacity: 0.12,
-            radius: 350,
-            weight: 1.5,
-            dashArray: '4, 4'
-        }).addTo(map);
+        const points = cluster.map(n => [n.latitude, n.longitude]);
+        // Observed node connections, not a measured deformation extent.
+        const circle = (points.length >= 3 ? L.polygon(points, {color, fillOpacity: 0.12, weight: 1.5})
+            : L.polyline(points, {color, weight: 3, dashArray: '4, 4'})).addTo(map);
 
         circle.bindTooltip(`<strong>${zoneName} (${hasHigh ? 'Critical' : 'Warning'})</strong><br>${cluster.length} nodes correlated`, {
             permanent: false,
@@ -266,10 +210,10 @@ function updateZonesUI() {
     if (!listContainer) return;
 
     if (spatialClusters.length === 0) {
-        listContainer.innerHTML = '<div class="empty-list-state">No spatial anomalies detected. Network shows normal background noise.</div>';
-        zonesGridTab.innerHTML = '<div class="empty-list-state">No active deformation risk zones detected. All nodes reporting stable spatial vectors.</div>';
+        listContainer.innerHTML = '<div class="empty-list-state">No correlated risk zones. Check node status and available evidence.</div>';
+        zonesGridTab.innerHTML = '<div class="empty-list-state">No correlated risk zones. Missing telemetry does not establish stable ground.</div>';
         document.getElementById("kpi-risk-zones").innerText = "00";
-        document.getElementById("kpi-risk-zones-status").innerText = "No deformation";
+        document.getElementById("kpi-risk-zones-status").innerText = "No correlated zones";
         document.getElementById("kpi-risk-zones-status").className = "kpi-status";
         return;
     }
@@ -290,7 +234,7 @@ function updateZonesUI() {
 
         const severityClass = hasHigh ? "zone-severity-high" : "zone-severity-medium";
         const badgeClass = hasHigh ? "badge-red" : "badge-amber";
-        const statusText = hasHigh ? "CRITICAL DEFORMATION" : "WARNING ALERT";
+        const statusText = hasHigh ? "SUBSIDENCE RISK" : "WARNING ALERT";
 
         listHtml += `
             <div class="zone-list-item ${severityClass}">
@@ -343,7 +287,8 @@ function isNodeClustered(nodeId) {
 // SENSOR NODE GIS MARKERS RENDERER
 // ==========================================================================
 function renderNodeMarker(node, reading) {
-    const color = getRiskColor(reading?.risk_level || "LOW");
+    if (node.latitude == null || node.longitude == null) return;
+    const color = reading?.online === false || !reading ? "#64748b" : getRiskColor(reading?.risk_level || "LOW");
     const iconPath = getNodeIcon(node.node_type);
     const nodeLabel = getNodeLabel(node.node_type);
 
@@ -380,6 +325,7 @@ function renderNodeMarker(node, reading) {
         markers[node.node_id].setIcon(customDivIcon);
     }
 
+    markers[node.node_id].bindTooltip(`${node.node_id} · ${reading?.status || 'OFFLINE'} · ${reading?.risk_level || 'UNAVAILABLE'}<br>${reading?.timestamp || 'No telemetry'}<br>RSSI ${fmt(reading?.rssi)} dBm / SNR ${fmt(reading?.snr)} dB`);
     if (node.node_type === "crack" && node.pole_a_lat && node.pole_b_lat) {
         if (!crackLines[node.node_id]) {
             const line = L.polyline([
@@ -401,32 +347,31 @@ function renderNodeMarker(node, reading) {
 // ==========================================================================
 // EVENT LOGS / ALERTS COMPONENT
 // ==========================================================================
-function updateAlertsLog(readings) {
+function updateAlertsLog(readings, events=[]) {
     const logContainer = document.getElementById("recent-alerts-container");
     const safetyLogsTbody = document.getElementById("safety-logs-tbody");
     
     if (!logContainer) return;
 
-    const activeAlarms = Object.values(readings)
-        .filter(r => r.risk_level === "HIGH" || r.risk_level === "MEDIUM")
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const liveAlarmCount = Object.values(readings).filter(r => r.online && ['MEDIUM','HIGH','CRITICAL'].includes(r.risk_level)).length;
+    const activeAlarms = events;
 
-    document.getElementById("sidebar-alert-badge").innerText = activeAlarms.length;
+    document.getElementById("sidebar-alert-badge").innerText = liveAlarmCount;
     const bellBadge = document.getElementById("bell-badge");
-    if (activeAlarms.length > 0) {
-        bellBadge.innerText = activeAlarms.length;
+    if (liveAlarmCount > 0) {
+        bellBadge.innerText = liveAlarmCount;
         bellBadge.style.display = "inline-block";
     } else {
         bellBadge.style.display = "none";
     }
 
     // Always override Anomalies Today count to "07" if simulation is running, or count dynamically
-    document.getElementById("kpi-anomalies").innerText = String(Math.max(7, activeAlarms.length)).padStart(2, '0');
+    document.getElementById("kpi-anomalies").innerText = String(liveAlarmCount).padStart(2, '0');
     document.getElementById("kpi-anomalies-status").innerText = "ML triggers active";
 
     if (activeAlarms.length === 0) {
         logContainer.innerHTML = '<div class="empty-list-state">No active safety warnings.</div>';
-        safetyLogsTbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding: 20px;">No historical triggers recorded.</td></tr>';
+        safetyLogsTbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding: 20px;">No active triggers. Use Analysis for historical telemetry.</td></tr>';
         return;
     }
 
@@ -451,7 +396,7 @@ function updateAlertsLog(readings) {
                         <span class="alert-node">${alert.node_id}</span>
                         <span class="alert-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
                     </div>
-                    <div class="alert-reason">${reason} — Risk Score: ${alert.risk_score.toFixed(1)}</div>
+                    <div class="alert-reason">${alert.evidence || reason} — Risk Score: ${alert.risk_score.toFixed(1)}</div>
                 </div>
             </div>
         `;
@@ -481,7 +426,7 @@ function updateAlertsLog(readings) {
                 <td>${new Date(alert.timestamp).toLocaleString()}</td>
                 <td>${alert.risk_score.toFixed(1)} / 100</td>
                 <td>${factors.join(" + ") || "ML Feature Shift"}</td>
-                <td><strong class="text-green">Connected</strong></td>
+                <td>${currentMode === "REAL" ? `RSSI ${fmt(latestReadings[node.node_id]?.rssi)} / SNR ${fmt(latestReadings[node.node_id]?.snr)}` : "SIMULATION"}</td>
             </tr>
         `;
     });
@@ -497,11 +442,27 @@ function selectNodeAndSwitchTab(nodeId) {
 // SELECTED NODE TELEMETRY CARD, DIR INDICATORS & EXPLANER
 // ==========================================================================
 async function selectNode(nodeId) {
+    const sourceAtStart = currentMode;
     selectedNodeId = nodeId;
     const node = nodesList.find(n => n.node_id === nodeId);
     const reading = latestReadings[nodeId];
 
-    if (!node || !reading) return;
+    if (!node) return;
+    if (currentMode === 'REAL') {
+        document.getElementById('sidebar-node-title').textContent = nodeId;
+        const fields = [['Roll',reading?.roll,'°'],['Pitch',reading?.pitch,'°'],['Vibration',reading?.vibration,''],['Soil ADC (raw)',reading?.soil,''],['RSSI',reading?.rssi,'dBm'],['SNR',reading?.snr,'dB']];
+        document.getElementById('node-info-content').innerHTML = `<div class="node-meta-grid">REAL HARDWARE · ${reading?.status || 'OFFLINE'}<br>Risk: ${reading?.risk_level || 'UNAVAILABLE'}<br>${node.latitude == null ? 'Location not registered' : `${node.latitude}, ${node.longitude}`}</div><div class="telemetry-grid">${fields.map(([label,value,unit]) => `<div class="tel-cell"><span class="tel-label">${label}</span><span class="tel-value">${fmt(value,2)} ${Number.isFinite(value) ? unit : ''}</span></div>`).join('')}</div><p>${reading?.evidence || 'Waiting for physical telemetry'}</p><p>Battery / displacement / BME280: NOT INSTALLED</p><p>Last seen: ${reading?.last_seen || 'UNAVAILABLE'}<br>Sequence: ${reading?.sequence ?? 'UNAVAILABLE'}</p>`;
+        const restartButton = document.createElement('button');
+        restartButton.type = 'button';
+        restartButton.className = 'btn btn-secondary';
+        restartButton.textContent = 'Node restarted? Start new session';
+        restartButton.onclick = () => startNodeSession(nodeId);
+        document.getElementById('node-info-content').appendChild(restartButton);
+        document.getElementById('ai-explainability-details').textContent = reading?.evidence || 'No telemetry. Missing sensors are unavailable.';
+        updateLiveTrendChart(nodeId);
+        return;
+    }
+    if (!reading) return;
 
     // Highlight marker visually
     Object.keys(markers).forEach(id => {
@@ -522,6 +483,7 @@ async function selectNode(nodeId) {
     try {
         const response = await fetch(`/api/history/${nodeId}`);
         const historyData = await response.json();
+        if (currentMode !== sourceAtStart || selectedNodeId !== nodeId) return;
         
         if (historyData.length >= 2) {
             const currentRec = historyData[historyData.length - 1];
@@ -685,7 +647,7 @@ async function selectNode(nodeId) {
             </div>
             <div class="meta-item">
                 <span class="meta-label">BATTERY</span>
-                <span class="meta-value">${reading.battery.toFixed(1)}%</span>
+                <span class="meta-value">${fmt(reading.battery)}${reading.battery == null ? "" : "%"}</span>
             </div>
         </div>
 
@@ -704,7 +666,7 @@ async function selectNode(nodeId) {
         ${actionBoxHtml}
 
         <div class="update-footer">
-            Last Update: ${new Date(reading.timestamp).toLocaleTimeString()}
+            Last Update: ${reading.timestamp ? new Date(reading.timestamp).toLocaleTimeString() : "UNAVAILABLE"}
         </div>
     `;
 
@@ -733,11 +695,13 @@ function viewHistoryForNode(nodeId) {
 // TELEMETRY LIVE LINE CHART CONFIG (WARM INDUSTRIAL PALETTE)
 // ==========================================================================
 async function updateLiveTrendChart(nodeId) {
+    const sourceAtStart = currentMode;
     const selectedMetric = document.getElementById("chart-metric-select").value;
     
     try {
         const response = await fetch(`/api/history/${nodeId}`);
         const historyData = await response.json();
+        if (currentMode !== sourceAtStart || selectedNodeId !== nodeId) return;
 
         const labels = historyData.map(h => {
             const time = new Date(h.timestamp);
@@ -757,11 +721,11 @@ async function updateLiveTrendChart(nodeId) {
             datasetLabel = "Tilt Vector Magnitude";
             color = "#F59E0B"; // Amber
         } else if (selectedMetric === "vibration") {
-            data = historyData.map(h => h.vibration || 0);
+            data = historyData.map(h => h.vibration ?? null);
             datasetLabel = "Vibration amplitude";
             color = "#10B981"; // Green
         } else if (selectedMetric === "displacement") {
-            data = historyData.map(h => h.displacement_mm || 0);
+            data = historyData.map(h => h.displacement_mm ?? null);
             datasetLabel = "Displacement (mm)";
             color = "#8B5CF6"; // Purple
         }
@@ -931,8 +895,7 @@ function updateSensorRegistryTable() {
 
     let rowsHtml = "";
     nodesList.forEach(node => {
-        const reading = latestReadings[node.node_id];
-        if (!reading) return;
+        const reading = latestReadings[node.node_id] || {status:'OFFLINE',risk_level:'UNAVAILABLE',battery:null,timestamp:null};
 
         if (activeFilter === "ground" && node.node_type !== "UnderGround") return;
         if (activeFilter === "crack" && node.node_type !== "crack") return;
@@ -946,11 +909,11 @@ function updateSensorRegistryTable() {
             <tr class="${rowActive}" onclick="selectNodeAndSwitchTab('${node.node_id}')">
                 <td style="font-family: 'JetBrains Mono', monospace; font-weight:700;">${node.node_id}</td>
                 <td>${nodeLabel}</td>
-                <td><strong class="text-green">● Online</strong></td>
+                <td><strong>${reading.status || "OFFLINE"}</strong></td>
                 <td><span class="status-badge ${badgeClass}">${reading.risk_level}</span></td>
-                <td>${reading.battery.toFixed(1)}%</td>
-                <td>${new Date(reading.timestamp).toLocaleTimeString()}</td>
-                <td><strong class="text-green">Connected</strong></td>
+                <td>${fmt(reading.battery)}${reading.battery == null ? "" : "%"}</td>
+                <td>${reading.timestamp ? new Date(reading.timestamp).toLocaleTimeString() : "UNAVAILABLE"}</td>
+                <td>${currentMode === "REAL" ? `RSSI ${fmt(latestReadings[node.node_id]?.rssi)} / SNR ${fmt(latestReadings[node.node_id]?.snr)}` : "SIMULATION"}</td>
             </tr>
         `;
     });
@@ -984,6 +947,7 @@ function populateHistoricalDropdowns() {
 }
 
 document.getElementById("btn-run-query").addEventListener("click", async () => {
+    const sourceAtStart = currentMode;
     const primaryNode = document.getElementById("hist-primary-node").value;
     const compareNode = document.getElementById("hist-compare-node").value;
     const metric = document.getElementById("hist-metric").value;
@@ -1002,13 +966,14 @@ document.getElementById("btn-run-query").addEventListener("click", async () => {
             data2 = await res2.json();
         }
 
+        if (currentMode !== sourceAtStart) return;
         const labels = data1.map(h => new Date(h.timestamp).toLocaleTimeString());
         
         const parseDataValue = (row, field) => {
             if (field === "risk_score") return row.risk_score;
             if (field === "tilt") return getTiltMagnitude(row.tilt_x, row.tilt_y);
-            if (field === "vibration") return row.vibration || 0;
-            if (field === "displacement") return row.displacement_mm || 0;
+            if (field === "vibration") return row.vibration ?? null;
+            if (field === "displacement") return row.displacement_mm ?? null;
             if (field === "battery") return row.battery;
             return 0;
         };
@@ -1105,7 +1070,7 @@ function updateDiagnosticsData(nodeCount, readingsCount) {
     const dbSizeEl = document.getElementById("health-db-size");
     const readingsCountEl = document.getElementById("health-db-readings");
 
-    if (dbSizeEl) dbSizeEl.innerText = "3.74 MB";
+    if (dbSizeEl) dbSizeEl.innerText = "LOCAL SQLite";
     if (readingsCountEl) readingsCountEl.innerText = `${readingsCount} data entries`;
 }
 
@@ -1322,31 +1287,44 @@ if (alertAckBtn) {
 // BACKEND REAL-TIME POLLING PIPELINE
 // ==========================================================================
 async function pollDataPipeline() {
+    if (pollBusy) return;
+    pollBusy = true;
     try {
-        if (nodesList.length === 0) {
-            const res = await fetch("/api/nodes");
-            nodesList = await res.json();
-            
-            if (nodesList.length > 0) {
-                const group = L.featureGroup(nodesList.map(n => L.marker([n.latitude, n.longitude])));
-                map.fitBounds(group.getBounds().pad(0.1));
-            }
+        const response = await fetch('/api/live');
+        if (!response.ok) throw new Error('Live state unavailable');
+        const {system, nodes:registered, readings:readingsData, twin, events} = await response.json();
+        if (currentMode !== system.mode) {
+            Object.values(markers).forEach(marker => map.removeLayer(marker));
+            Object.keys(markers).forEach(key => delete markers[key]);
+            Object.values(crackLines).forEach(line => map.removeLayer(line));
+            Object.keys(crackLines).forEach(key => delete crackLines[key]);
+            selectedNodeId = null;
+            document.getElementById('hist-primary-node').replaceChildren();
+            document.getElementById('hist-compare-node').replaceChildren(new Option('None','none'));
+            document.getElementById('history-results').classList.add('hidden');
+            document.getElementById('ai-insights-container').textContent = 'Generate an assessment for the current data source.';
+            const explanation = document.getElementById('ai-explainability-details');
+            if (explanation) explanation.textContent = 'Select a node to inspect available evidence.';
+            if (liveChartInstance) {liveChartInstance.destroy(); liveChartInstance=null;}
+            if (historicalChartInstance) {historicalChartInstance.destroy(); historicalChartInstance=null;}
         }
-
-        const readingsRes = await fetch("/api/readings/latest");
-        const readingsData = await readingsRes.json();
-
-        let totalReadingsStored = 0;
-
-        readingsData.forEach(reading => {
-            latestReadings[reading.node_id] = reading;
-            totalReadingsStored += 100;
-        });
-
-        // Default selection: select C-020 on load if nothing is selected
-        if (!selectedNodeId && latestReadings["C-020"]) {
-            selectedNodeId = "C-020";
-        }
+        currentMode = system.mode;
+        document.querySelectorAll('.data-source-label').forEach(el => el.textContent = currentMode === 'REAL' ? 'REAL HARDWARE' : 'SIMULATION');
+        document.getElementById('sidebar-mode-status').textContent = currentMode === 'REAL' ? 'Physical telemetry' : 'Simulation active';
+        document.getElementById('hardware-mode').value = currentMode;
+        document.getElementById('hardware-health').textContent = `Mode: ${currentMode === 'REAL' ? 'REAL HARDWARE' : 'SIMULATION'} · LoRa Network: ${system.lora_network} · HOST-01: ${system.host_01} · USB: ${system.usb?.port || 'COM7'} ${system.usb?.status || 'UNAVAILABLE'} · Mother Host: ${system.mother_host} · Database: ${system.database} · ML Engine: ${system.ml_engine}`;
+        document.getElementById('pipeline-health-details').textContent = document.getElementById('hardware-health').textContent +
+            ` · Received: ${system.usb?.received ?? 0} · Live updates: ${system.usb?.applied ?? 0} · Duplicates: ${system.usb?.duplicates ?? 0} · Historical: ${system.usb?.historical ?? 0} · Latest received sequence: ${system.usb?.last_sequence ?? 'UNAVAILABLE'} · ${system.usb?.last_result || system.usb?.last_error || 'Waiting for telemetry'}`;
+        nodesList = registered;
+        latestReadings = Object.fromEntries(readingsData.map(r => [r.node_id,r]));
+        window.backendZones = twin.zones;
+        selectedNodeId ||= nodesList[0]?.node_id;
+        document.getElementById('kpi-active-nodes').textContent = `${readingsData.filter(r=>r.online).length} / ${nodesList.length}`;
+        document.getElementById('kpi-active-status').textContent = `${readingsData.filter(r=>r.online).length} ONLINE`;
+        document.getElementById('kpi-system-health').textContent = system.mother_host;
+        document.getElementById('kpi-sync-sec').textContent = '2s';
+        const totalReadingsStored = system.readings_count;
+        populateHistoricalDropdowns();
 
         // Calculate and map spatial clusters (Contour deformation areas)
         calculateSpatialClusters(nodesList, latestReadings);
@@ -1357,7 +1335,7 @@ async function pollDataPipeline() {
         });
 
         // Update events logger and safety logs
-        updateAlertsLog(latestReadings);
+        updateAlertsLog(latestReadings, events);
 
         // Update Sensor registry list table
         updateSensorRegistryTable();
@@ -1383,7 +1361,7 @@ async function pollDataPipeline() {
         if (selectedNodeId) {
             const node = nodesList.find(n => n.node_id === selectedNodeId);
             const reading = latestReadings[selectedNodeId];
-            if (node && reading) {
+            if (node) {
                 selectNode(selectedNodeId);
             }
         }
@@ -1392,18 +1370,26 @@ async function pollDataPipeline() {
 
     } catch (error) {
         console.error("Sync data failure", error);
+        document.getElementById('hardware-health').textContent = 'Mother Host: OFFLINE · Live telemetry unconfirmed';
+        document.getElementById('pipeline-health-details').textContent = 'Mother Host unavailable; sensor status unconfirmed';
+        document.getElementById('kpi-active-status').textContent = 'UNCONFIRMED';
+        Object.values(latestReadings).forEach(r => {r.online=false;r.status='OFFLINE';});
+        nodesList.forEach(n => renderNodeMarker(n,latestReadings[n.node_id]));
+        updateSensorRegistryTable();
+        if(selectedNodeId) selectNode(selectedNodeId);
         
         const syncTimeEl = document.getElementById("header-sync-time");
         if (syncTimeEl) {
             syncTimeEl.innerHTML = '<span class="status-badge badge-red" style="padding: 2px 4px;">⚠ CONNECTION INTERRUPTED</span>';
         }
-    }
+    } finally { pollBusy = false; }
 }
 
 // ==========================================================================
 // TIER 2 ASYNCHRONOUS STRATEGIC AI INSIGHTS SYNTHESIZER
 // ==========================================================================
 async function synthesizeAIHistoricalBrief() {
+    const sourceAtStart = currentMode;
     const container = document.getElementById("ai-insights-container");
     const btn = document.getElementById("btn-generate-ai-brief");
     if (!container) return;
@@ -1417,6 +1403,7 @@ async function synthesizeAIHistoricalBrief() {
         const response = await fetch("/api/ai/insights");
         const data = await response.json();
 
+        if (currentMode !== sourceAtStart) return;
         if (data.status === "INSUFFICIENT_DATA") {
             container.innerHTML = `
                 <div class="insights-placeholder">
@@ -1465,7 +1452,7 @@ async function synthesizeAIHistoricalBrief() {
                     </div>
                     <div class="insight-metric-item">
                         <span>Max Aperture Drift</span>
-                        <strong>${metrics.peak_crack_displacement_mm || 0} mm</strong>
+                        <strong>${fmt(metrics.peak_crack_displacement_mm)}${metrics.peak_crack_displacement_mm == null ? "" : " mm"}</strong>
                     </div>
                 </div>
 
@@ -1505,5 +1492,22 @@ if (aiBriefBtn) {
 initTheme();
 
 // Initial polling run and tick timing
+document.getElementById('hardware-mode').addEventListener('change', async event => {
+    const response = await fetch('/api/system', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:event.target.value})});
+    if (!response.ok) {alert('Mode change failed');return;}
+    await pollDataPipeline();
+});
 pollDataPipeline();
 setInterval(pollDataPipeline, 2000);
+
+async function startNodeSession(nodeId) {
+    if (!confirm(`Confirm ${nodeId} has physically restarted and previous buffered packets have been drained. Begin a new sequence session? Existing history will be kept.`)) return;
+    try {
+        const response = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/session`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({confirmed_restart: true})
+        });
+        if (!response.ok) throw new Error('Session change failed');
+        await pollDataPipeline();
+    } catch (error) { alert(error.message); }
+}

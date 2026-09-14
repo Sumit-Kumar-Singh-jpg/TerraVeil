@@ -15,7 +15,7 @@ Layer 2 is responsible for:
 
 from datetime import datetime
 import numpy as np
-from database import get_connection, get_nodes
+from database import get_connection, get_nodes, mode
 
 
 def analyze_historical_trends():
@@ -23,6 +23,7 @@ def analyze_historical_trends():
     Asynchronously analyzes accumulated historical sensor data across all deployed nodes
     to identify long-term trends, deformation rates, and spatial correlations.
     """
+    source = mode()
     conn = get_connection()
     nodes = get_nodes()
     
@@ -31,10 +32,10 @@ def analyze_historical_trends():
     cursor.execute("""
         SELECT node_id, timestamp, risk_score, risk_level, 
                tilt_x, tilt_y, vibration, displacement_mm, temperature, humidity, battery
-        FROM readings
+        FROM readings WHERE data_source=? AND processed=1
         ORDER BY timestamp DESC
         LIMIT 400
-    """)
+    """, (source,))
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
@@ -54,7 +55,7 @@ def analyze_historical_trends():
     medium_risk_count = sum(1 for r in rows if r.get("risk_level") == "MEDIUM")
 
     # Node-level breakdowns
-    ground_rows = [r for r in rows if r["node_id"].startswith("G-")]
+    ground_rows = [r for r in rows if not r["node_id"].startswith("C-")]
     crack_rows = [r for r in rows if r["node_id"].startswith("C-")]
 
     # Calculate tilt velocities for underground nodes
@@ -124,7 +125,18 @@ def analyze_historical_trends():
         recommendations.append("Perform routine weekly sensor battery and LoRa gateway signal strength verification.")
         recommendations.append("Log nominal baseline report into DGMS Monthly Safety Compliance archive.")
 
+    if source == 'REAL':
+        summary_paragraphs = [f"REAL HARDWARE: {total_samples} stored observations; peak risk score {max_risk:.1f}/100. "
+            "Tilt and vibration anomalies require inspection, persistence and nearby corroborating evidence. "
+            "This advisory does not establish subsidence or measure displacement."]
+        recommendations = ['Inspect sensor mounting and compare roll/pitch trends.',
+            'Review vibration events and raw soil ADC values; soil is not calibrated to a percentage.',
+            'Battery, BME280 and displacement measurements are unavailable.']
+        if len(risk_scores) < 20:
+            progression_text = 'Insufficient history for a trend assessment.'
+
     return {
+        "data_source": source,
         "generated_at": datetime.utcnow().isoformat(),
         "architecture_layer": "Tier 2: Asynchronous AI/LLM Historical Intelligence Layer",
         "safety_path_isolation": "NON_CRITICAL_PATH_ADVISORY",
@@ -137,8 +149,8 @@ def analyze_historical_trends():
             "medium_risk_triggers_count": medium_risk_count,
             "average_tilt_magnitude_deg": round(avg_tilt_mag, 3),
             "peak_tilt_magnitude_deg": round(max_tilt_mag, 3),
-            "average_crack_displacement_mm": round(avg_disp, 2),
-            "peak_crack_displacement_mm": round(max_disp, 2)
+            "average_crack_displacement_mm": round(avg_disp, 2) if displacements else None,
+            "peak_crack_displacement_mm": round(max_disp, 2) if displacements else None
         },
         "risk_progression": {
             "status": progression_status,
@@ -146,5 +158,5 @@ def analyze_historical_trends():
         },
         "geotechnical_executive_summary": " ".join(summary_paragraphs),
         "engineering_recommendations": recommendations,
-        "dgms_compliance_status": "DGMS Standards Compliant — Automated Advisory Record"
+        "dgms_compliance_status": "Prototype advisory; no compliance certification"
     }

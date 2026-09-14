@@ -1,0 +1,491 @@
+#include <Arduino.h>
+#include <SPI.h>
+#include <LoRa.h>
+
+// ============================================================
+// TerraVeil — Zone Edge Host
+// ESP32 DOIT DevKit V1 + LoRa RA-02
+//
+// Receives:
+// DATA,UG-01,sequence,roll,pitch,vibration,soil
+//
+// Sends:
+// ACK,UG-01,sequence
+// ============================================================
+
+
+// ============================================================
+// HOST CONFIGURATION
+// ============================================================
+
+#define HOST_ID "HOST-01"
+#define ZONE_ID "ZONE-A"
+
+
+// ============================================================
+// LORA PINS
+// ============================================================
+
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+#define LORA_SS     5
+#define LORA_RST   14
+#define LORA_DIO0  26
+
+#define LORA_FREQUENCY 433E6
+
+
+// ============================================================
+// DUPLICATE PACKET PROTECTION
+// ============================================================
+
+String lastNodeID = "";
+long lastSequence = -1;
+
+
+// ============================================================
+// SEND ACK
+// ============================================================
+
+void sendACK(const String &nodeID, const String &sequence)
+{
+    String ackPacket = "ACK," + nodeID + "," + sequence;
+
+    Serial.print("[ACK] Sending: ");
+    Serial.println(ackPacket);
+
+    LoRa.beginPacket();
+    LoRa.print(ackPacket);
+
+    int result = LoRa.endPacket();
+
+    if (result == 1)
+    {
+        Serial.println("[ACK] Sent successfully.");
+    }
+    else
+    {
+        Serial.println("[ACK] Transmission failed!");
+    }
+}
+
+
+// ============================================================
+// PROCESS DATA PACKET
+// ============================================================
+
+void processPacket(const String &packet)
+{
+    Serial.println();
+    Serial.println("============================================");
+    Serial.println("           PACKET RECEIVED");
+    Serial.println("============================================");
+
+    Serial.print("RAW: ");
+    Serial.println(packet);
+
+    // --------------------------------------------------------
+    // Ignore ACK packets
+    // --------------------------------------------------------
+
+    if (packet.startsWith("ACK,"))
+    {
+        Serial.println("[INFO] ACK packet received.");
+        Serial.println("[INFO] Host will NOT acknowledge an ACK.");
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // Check packet type
+    // --------------------------------------------------------
+
+    if (!packet.startsWith("DATA,"))
+    {
+        Serial.println("[ERROR] Unknown packet type.");
+        Serial.println("============================================");
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // Convert String to character buffer
+    // --------------------------------------------------------
+
+    char buffer[160];
+
+    packet.toCharArray(buffer, sizeof(buffer));
+
+
+    // --------------------------------------------------------
+    // Parse CSV
+    // --------------------------------------------------------
+
+    char *token;
+
+
+    // DATA
+    token = strtok(buffer, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing packet type.");
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // NODE ID
+    // --------------------------------------------------------
+
+    token = strtok(nullptr, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing Node ID.");
+        return;
+    }
+
+    String nodeID = String(token);
+
+
+    // --------------------------------------------------------
+    // SEQUENCE
+    // --------------------------------------------------------
+
+    token = strtok(nullptr, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing sequence number.");
+        return;
+    }
+
+    long sequence = atol(token);
+
+
+    // --------------------------------------------------------
+    // ROLL
+    // --------------------------------------------------------
+
+    token = strtok(nullptr, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing roll.");
+        return;
+    }
+
+    float roll = atof(token);
+
+
+    // --------------------------------------------------------
+    // PITCH
+    // --------------------------------------------------------
+
+    token = strtok(nullptr, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing pitch.");
+        return;
+    }
+
+    float pitch = atof(token);
+
+
+    // --------------------------------------------------------
+    // VIBRATION
+    // --------------------------------------------------------
+
+    token = strtok(nullptr, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing vibration value.");
+        return;
+    }
+
+    int vibration = atoi(token);
+
+
+    // --------------------------------------------------------
+    // SOIL
+    // --------------------------------------------------------
+
+    token = strtok(nullptr, ",");
+
+    if (token == nullptr)
+    {
+        Serial.println("[ERROR] Missing soil value.");
+        return;
+    }
+
+    int soil = atoi(token);
+
+
+    // ========================================================
+    // VALIDATION
+    // ========================================================
+
+    if (nodeID.length() == 0)
+    {
+        Serial.println("[ERROR] Invalid Node ID.");
+        return;
+    }
+
+    if (sequence < 0)
+    {
+        Serial.println("[ERROR] Invalid sequence number.");
+        return;
+    }
+
+    if (vibration != 0 && vibration != 1)
+    {
+        Serial.println("[ERROR] Invalid vibration value.");
+        return;
+    }
+
+
+    // ========================================================
+    // DUPLICATE CHECK
+    // ========================================================
+
+    if (nodeID == lastNodeID && sequence == lastSequence)
+    {
+        Serial.println("[INFO] Duplicate packet detected.");
+        Serial.println("[INFO] Sending ACK again.");
+
+        sendACK(nodeID, String(sequence));
+
+        return;
+    }
+
+
+    // Save latest packet identity
+    lastNodeID = nodeID;
+    lastSequence = sequence;
+
+
+    // ========================================================
+    // RADIO INFORMATION
+    // ========================================================
+
+    int rssi = LoRa.packetRssi();
+    float snr = LoRa.packetSnr();
+
+
+    // ========================================================
+    // DISPLAY SENSOR DATA
+    // ========================================================
+
+    Serial.println("--------------------------------------------");
+
+    Serial.print("Host ID       : ");
+    Serial.println(HOST_ID);
+
+    Serial.print("Zone ID       : ");
+    Serial.println(ZONE_ID);
+
+    Serial.print("Node ID       : ");
+    Serial.println(nodeID);
+
+    Serial.print("Sequence      : ");
+    Serial.println(sequence);
+
+    Serial.print("Roll          : ");
+    Serial.print(roll, 2);
+    Serial.println(" deg");
+
+    Serial.print("Pitch         : ");
+    Serial.print(pitch, 2);
+    Serial.println(" deg");
+
+    Serial.print("Vibration     : ");
+
+    if (vibration == 1)
+    {
+        Serial.println("DETECTED");
+    }
+    else
+    {
+        Serial.println("NORMAL");
+    }
+
+    Serial.print("Soil ADC      : ");
+    Serial.println(soil);
+
+    Serial.print("RSSI          : ");
+    Serial.print(rssi);
+    Serial.println(" dBm");
+
+    Serial.print("SNR           : ");
+    Serial.print(snr, 2);
+    Serial.println(" dB");
+
+    Serial.println("--------------------------------------------");
+
+
+    // ========================================================
+    // SEND ACK
+    // ========================================================
+
+    sendACK(nodeID, String(sequence));
+
+
+    // ========================================================
+    // PACKET COMPLETE
+    // ========================================================
+
+    Serial.println("[OK] Packet processed.");
+    Serial.println("============================================");
+}
+
+
+// ============================================================
+// SETUP
+// ============================================================
+
+void setup()
+{
+    Serial.begin(115200);
+
+    delay(1000);
+
+    Serial.println();
+    Serial.println();
+    Serial.println("================================================");
+    Serial.println("           TERRAVEIL ZONE EDGE HOST");
+    Serial.println("================================================");
+
+    Serial.print("Host ID : ");
+    Serial.println(HOST_ID);
+
+    Serial.print("Zone ID : ");
+    Serial.println(ZONE_ID);
+
+    Serial.println("-----------------------------------------------");
+
+    // --------------------------------------------------------
+    // SPI
+    // --------------------------------------------------------
+
+    SPI.begin(
+        LORA_SCK,
+        LORA_MISO,
+        LORA_MOSI,
+        LORA_SS
+    );
+
+
+    // --------------------------------------------------------
+    // LoRa pins
+    // --------------------------------------------------------
+
+    LoRa.setPins(
+        LORA_SS,
+        LORA_RST,
+        LORA_DIO0
+    );
+
+
+    // --------------------------------------------------------
+    // Start LoRa
+    // --------------------------------------------------------
+
+    Serial.println("Initializing LoRa...");
+
+    if (!LoRa.begin(LORA_FREQUENCY))
+    {
+        Serial.println();
+        Serial.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        Serial.println("ERROR: LoRa initialization FAILED!");
+        Serial.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+
+        Serial.println();
+        Serial.println("Check:");
+        Serial.println("1. RA-02 power = 3.3V");
+        Serial.println("2. GND connected");
+        Serial.println("3. SPI wiring");
+        Serial.println("4. NSS / RESET / DIO0 wiring");
+        Serial.println("5. Antenna connected");
+
+        while (true)
+        {
+            delay(1000);
+        }
+    }
+
+
+    // ========================================================
+    // LORA RADIO SETTINGS
+    // ========================================================
+
+    LoRa.setTxPower(17);
+
+    LoRa.setSpreadingFactor(7);
+
+    LoRa.setSignalBandwidth(125E3);
+
+    LoRa.setCodingRate4(5);
+
+    LoRa.setSyncWord(0x34);
+
+    LoRa.enableCrc();
+
+
+    // ========================================================
+    // STARTUP INFORMATION
+    // ========================================================
+
+    Serial.println("LoRa initialized successfully.");
+
+    Serial.println("-----------------------------------------------");
+
+    Serial.println("Frequency : 433 MHz");
+    Serial.println("TX Power  : 17 dBm");
+    Serial.println("SF        : 7");
+    Serial.println("Bandwidth : 125 kHz");
+    Serial.println("Coding    : 4/5");
+    Serial.println("Sync Word : 0x34");
+    Serial.println("CRC       : ENABLED");
+
+    Serial.println("-----------------------------------------------");
+
+    Serial.println("HOST READY");
+    Serial.println("Waiting for TerraVeil ground nodes...");
+
+    Serial.println("================================================");
+    Serial.println();
+}
+
+
+// ============================================================
+// LOOP
+// ============================================================
+
+void loop()
+{
+    int packetSize = LoRa.parsePacket();
+
+
+    // --------------------------------------------------------
+    // Packet received
+    // --------------------------------------------------------
+
+    if (packetSize > 0)
+    {
+        String packet = "";
+
+        while (LoRa.available())
+        {
+            packet += (char)LoRa.read();
+        }
+
+        processPacket(packet);
+    }
+
+
+    delay(10);
+}

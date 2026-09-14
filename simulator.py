@@ -4,8 +4,7 @@ import time
 import threading
 from datetime import datetime
 
-from database import add_node, add_reading
-from ml_model import calculate_risk
+from database import add_node, add_reading, mode
 
 
 NUM_NODES = 20
@@ -44,6 +43,7 @@ def create_nodes():
 
     global nodes
 
+    nodes.clear()
     random.seed(42)
 
     for i in range(NUM_NODES):
@@ -132,7 +132,7 @@ def generate_ground_reading(node):
         "vibration": vibration,
         "temperature": temperature,
         "humidity": humidity,
-        "battery": battery
+        "battery": min(100, battery)
     }
 
 
@@ -179,7 +179,7 @@ def generate_crack_reading(node):
     return {
         "displacement_mm": displacement,
         "potentiometer_raw": potentiometer_raw,
-        "battery": battery
+        "battery": min(100, battery)
     }
 
 
@@ -188,6 +188,10 @@ def run_simulation():
     global simulation_step
 
     while True:
+
+        if mode() != "SIMULATION":
+            time.sleep(2)
+            continue
 
         simulation_step += 1
 
@@ -201,27 +205,20 @@ def run_simulation():
 
                 values = generate_crack_reading(node)
 
-            risk_score, risk_level = calculate_risk(
-                node["node_type"],
-                values
-            )
-
-            reading = {
-                "node_id": node["node_id"],
-                "timestamp": datetime.utcnow().isoformat(),
-
-                **values,
-
-                "risk_score": risk_score,
-                "risk_level": risk_level
-            }
+            reading = {"node_id": node["node_id"], **values}
 
             add_reading(reading)
 
         time.sleep(2)
 
 
+_started = False
+
 def start_simulator():
+    global _started
+    if _started:
+        return
+    _started = True
 
     create_nodes()
 

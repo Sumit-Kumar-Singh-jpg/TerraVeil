@@ -32,6 +32,9 @@ for _ in range(2000):
     ])
 
 ground_model.fit(normal_ground_data)
+# Capability-specific model: never impute absent BME280 measurements.
+imu_model = IsolationForest(contamination=0.03, random_state=42)
+imu_model.fit(np.asarray(normal_ground_data)[:, :3])
 
 
 # --------------------------------------------------
@@ -86,13 +89,13 @@ def calculate_risk(node_type, values):
 
     if node_type == "UnderGround":
 
-        prediction, anomaly = evaluate_ground(
-            values["tilt_x"],
-            values["tilt_y"],
-            values["vibration"],
-            values["temperature"],
-            values["humidity"]
-        )
+        if values.get('temperature') is None or values.get('humidity') is None:
+            features = [[values['tilt_x'], values['tilt_y'], values['vibration']]]
+            prediction = imu_model.predict(features)[0]
+            anomaly = -imu_model.score_samples(features)[0]
+        else:
+            prediction, anomaly = evaluate_ground(values['tilt_x'], values['tilt_y'],
+                values['vibration'], values['temperature'], values['humidity'])
 
         # Domain-specific contribution
         tilt = np.sqrt(

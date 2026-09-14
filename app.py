@@ -1,3 +1,11 @@
+if __name__ == '__main__':
+    from pathlib import Path
+    from runtime_lock import InstanceLock
+    try:
+        _instance_lock = InstanceLock(Path(__file__).parent / '.runtime' / 'mother-host.lock')
+    except RuntimeError as error:
+        raise SystemExit(str(error))
+
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from datetime import datetime
 
@@ -5,7 +13,7 @@ from database import (
     init_db,
     get_nodes,
     get_latest_readings,
-    get_history
+    get_history, get_recent_events, mode, set_mode, start_node_session
 )
 
 from simulator import start_simulator
@@ -13,6 +21,10 @@ from digital_twin import build_twin_state
 
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 8192
+init_db()
+
+from telemetry import ingest, network_state
 
 # Global Alert & Siren State
 alert_state = {
@@ -37,6 +49,59 @@ alert_state = {
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+def accept_telemetry(payload):
+    result = ingest(payload)
+    if result.get('applied') and result.get('risk_level') == 'CRITICAL' and mode() == 'REAL':
+        alert_state.update(status='RED_ALERT', sirens_active=True,
+            triggered_at=datetime.utcnow().isoformat(), message='Validated persistent correlated critical sensor event')
+        for siren in alert_state['siren_zones']:
+            siren['status'] = 'ON'
+    return result
+
+
+@app.route('/api/telemetry', methods=['POST'])
+def telemetry():
+    try:
+        return jsonify(accept_telemetry(request.get_json(silent=True)))
+    except ValueError as error:
+        return jsonify(success=False, error=str(error)), 400
+
+
+@app.route('/api/system', methods=['GET', 'POST'])
+def system():
+    if request.method == 'POST':
+        payload = request.get_json(silent=True)
+        try:
+            set_mode(payload.get('mode') if isinstance(payload, dict) else None)
+        except ValueError as error:
+            return jsonify(success=False, error=str(error)), 400
+        if mode() == 'SIMULATION':
+            start_simulator()
+    return jsonify(network_state())
+
+
+@app.route('/api/live')
+def live_state():
+    source = mode()
+    registered = get_nodes(source)
+    readings = get_latest_readings(source)
+    response = jsonify(system=network_state(source), nodes=registered, readings=readings, events=get_recent_events(source),
+        twin=build_twin_state(registered, readings, alert_state))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/nodes/<node_id>/session', methods=['POST'])
+def new_node_session(node_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get('confirmed_restart') is not True:
+        return jsonify(success=False, error='Confirm the physical node restarted and previous buffered packets are drained'), 400
+    try:
+        return jsonify(success=True, session_id=start_node_session(node_id))
+    except ValueError as error:
+        return jsonify(success=False, error=str(error)), 400
 
 
 @app.route("/api/nodes")
@@ -178,14 +243,24 @@ def ai_architecture():
     })
 
 
+if mode() == "SIMULATION":
+    start_simulator()
+
+
 if __name__ == "__main__":
 
     init_db()
 
-    start_simulator()
+    if mode() == "SIMULATION":
+        start_simulator()
+
+    import logging
+    import serial_bridge
+    logging.basicConfig(level=logging.INFO)
+    serial_bridge.start(accept_telemetry)
 
     app.run(
-        debug=True,
+        debug=False,
         host="0.0.0.0",
         port=5000,
         use_reloader=False

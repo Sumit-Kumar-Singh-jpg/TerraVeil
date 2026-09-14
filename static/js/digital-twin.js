@@ -1,3 +1,4 @@
+const fmt = (v,n=1) => Number.isFinite(v) ? v.toFixed(n) : 'UNAVAILABLE';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -165,6 +166,7 @@ function updateNodes(snapshot){
     const ids=new Set(snapshot.nodes.map(n=>n.node_id));
     for(const [id,item] of nodeObjects)if(!ids.has(id)){scene.remove(item.root,item.label);item.label.material.map.dispose();item.label.material.dispose();nodeObjects.delete(id);}
     for(const node of snapshot.nodes){
+        if (!node.position) continue;
         const color=node.status==='ONLINE'?COLORS[node.risk_level]:COLORS.OFFLINE;let item=nodeObjects.get(node.node_id);
         if(!item){const root=hardware(node.node_type==='crack'?'CRACK_TEMPLATE':'GROUND_TEMPLATE');const label=makeLabel(node.node_id,color);label.scale.set(6,2.06,1);scene.add(label);item={root,label,color};nodeObjects.set(node.node_id,item);}
         if(item.color!==color){const label=makeLabel(node.node_id,color);item.label.material.map.dispose();item.label.material.map=label.material.map;label.material.dispose();item.color=color;}
@@ -172,7 +174,7 @@ function updateNodes(snapshot){
         item.label.position.set(x,surface(x,z)+4.1,z);item.label.visible=$('twin-markers').checked;item.label.userData.nodeId=node.node_id;
         item.root.traverse(part=>{part.userData.nodeId=node.node_id;if(!part.isMesh)return;const role=part.userData.role;
             if(role==='led'){part.material.color.set(color);part.material.emissive.set(color);part.material.emissiveIntensity=.9;}
-            if(role==='battery')part.material.color.setRGB(1-node.battery/100,node.battery/100,.03);
+            if(role==='battery'){if(node.battery==null)part.material.color.set('#657689');else part.material.color.setRGB(1-node.battery/100,node.battery/100,.03);}
             if(role==='link')part.material.color.set(node.status==='ONLINE'?'#498eea':'#657689');
             if(role==='anchor_b')part.position.set(.564643*(node.displacement_mm||0)*state.gain/1000,0,.825335*(node.displacement_mm||0)*state.gain/1000);
         });
@@ -193,6 +195,8 @@ function updateSirens(snapshot){
 
 function applySnapshot(snapshot){
     if(!state.ready)return;state.snapshot=snapshot;
+    $('twin-source-label').textContent = state.source==='demo' ? 'SIMULATION · RECORDED DEMO' : `${snapshot.input_mode === 'REAL' ? 'REAL HARDWARE' : 'SIMULATION'} · HOST TELEMETRY`;
+    $('twin-demo').disabled = snapshot.input_mode === 'REAL';
     const level=snapshot.deformation.subsidence_level||0;
     terrainMeshes.forEach((mesh,index)=>{
         const position=mesh.geometry.attributes.position,base=mesh.userData.base;
@@ -209,11 +213,11 @@ function showSelected(){
     $('twin-node-id').textContent=node.node_id;$('twin-node-risk').textContent=node.status==='ONLINE'?node.risk_level:node.status;
     $('twin-node-risk').style.color=node.status==='ONLINE'?COLORS[node.risk_level]:COLORS.OFFLINE;
     $('twin-node-type').textContent=node.node_type==='crack'?'Crack / displacement monitor':'Tilt / vibration monitor';
-    $('twin-reading-risk').textContent=`${node.risk_score.toFixed(1)} / 100`;
-    $('twin-reading-tilt').textContent=node.node_type==='crack'?'—':`${node.tilt_x.toFixed(2)}° / ${node.tilt_y.toFixed(2)}°`;
-    $('twin-reading-vibration').textContent=node.node_type==='crack'?'—':node.vibration.toFixed(3);
-    $('twin-reading-crack').textContent=node.node_type==='crack'?`${node.displacement_mm.toFixed(2)} mm`:'—';
-    $('twin-reading-battery').textContent=`${node.battery.toFixed(0)}%`;$('twin-reading-link').textContent=node.status;
+    $('twin-reading-risk').textContent=`${fmt(node.risk_score,1)} / 100`;
+    $('twin-reading-tilt').textContent=node.node_type==='crack'?'—':`${fmt(node.tilt_x,2)}° / ${fmt(node.tilt_y,2)}°`;
+    $('twin-reading-vibration').textContent=node.node_type==='crack'?'—':fmt(node.vibration,3);
+    $('twin-reading-crack').textContent=node.displacement_mm == null ? 'NOT INSTALLED' : node.node_type==='crack'?`${fmt(node.displacement_mm,2)} mm`:'—';
+    $('twin-reading-battery').textContent=node.battery == null ? 'NOT INSTALLED' : `${fmt(node.battery,0)}%`;$('twin-reading-link').textContent=`${node.node_status || node.status} · RSSI ${fmt(node.rssi)} / SNR ${fmt(node.snr)}${node.position ? '' : ' · Location not registered'}`;
     for(const[id,item]of nodeObjects)item.label.scale.setScalar(id===state.selected?1.2:1).multiply(new THREE.Vector3(6,2.06,1));
 }
 function pickNode(event){
@@ -224,12 +228,12 @@ function pickNode(event){
 
 async function pollHost(){
     if(state.pollBusy)return;state.pollBusy=true;state.lastPoll=performance.now();
-    try{state.host=await json('/api/twin/state');if(state.source==='host'){applySnapshot(state.host);const online=state.host.nodes.filter(n=>n.status==='ONLINE').length;setLink(online?`Synced · ${online} online`:'Connected · readings stale',!online);}}
+    try{state.host=await json('/api/twin/state');if(state.host.input_mode==='REAL' && state.source==='demo'){state.source='host';state.playing=false;$('twin-replay').classList.add('hidden');}if(state.source==='host'){applySnapshot(state.host);const online=state.host.nodes.filter(n=>n.status==='ONLINE').length;setLink(online?`Synced · ${online} online`:'Connected · readings stale',!online);}}
     catch(error){if(state.source==='host')setLink('Connection lost · holding last state',true);}
     finally{state.pollBusy=false;}
 }
 async function source(mode){
-    if(!state.ready)return;state.source=mode;state.playing=false;stopTour();
+    if(!state.ready || (mode==='demo' && state.host?.input_mode==='REAL'))return;state.source=mode;state.playing=false;stopTour();
     $('twin-host').classList.toggle('selected',mode==='host');$('twin-demo').classList.toggle('selected',mode==='demo');$('twin-replay').classList.toggle('hidden',mode!=='demo');
     $('twin-source-label').textContent=mode==='host'?'HOST TELEMETRY · SIMULATED INPUT':'RECORDED DEMO · HOST UNCHANGED';
     if(mode==='host'){if(state.host)applySnapshot(state.host);await pollHost();}
@@ -241,7 +245,7 @@ let previous=0,lastDemo=-1;
 function animate(now){
     requestAnimationFrame(animate);const dt=previous?Math.min(.1,(now-previous)/1000):0;previous=now;
     if(!state.active||document.hidden)return;
-    if(state.source==='host'&&now-state.lastPoll>2000)pollHost();
+    if(now-state.lastPoll>2000)pollHost();
     if(state.source==='demo'&&state.playing){state.time=Math.min(44,state.time+dt);if(Math.round(state.time*4)!==lastDemo){lastDemo=Math.round(state.time*4);applyDemo();}if(state.time>=44){state.playing=false;$('twin-play').textContent='Play demo';}}
     if(state.tour!==null){const elapsed=(now-state.tour)/1000,t=smooth((elapsed-6)/6);camera.position.lerpVectors(new THREE.Vector3(93,286,558),new THREE.Vector3(80,125,168),t);controls.target.lerpVectors(new THREE.Vector3(0,40,0),new THREE.Vector3(36,55,66),t);if(elapsed>12)stopTour();}
     const flash=(Math.sin(now*.008)>0)?3:.2;

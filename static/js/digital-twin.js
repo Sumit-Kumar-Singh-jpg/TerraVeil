@@ -177,12 +177,74 @@ function updateNodes(snapshot){
             if(role==='battery'){if(node.battery==null)part.material.color.set('#657689');else part.material.color.setRGB(1-node.battery/100,node.battery/100,.03);}
             if(role==='link')part.material.color.set(node.status==='ONLINE'?'#498eea':'#657689');
             if(role==='anchor_b')part.position.set(.564643*(node.displacement_mm||0)*state.gain/1000,0,.825335*(node.displacement_mm||0)*state.gain/1000);
+// --- Georeferencing Adapter (Section 13 & 14) ---
+const GEO_BOUNDS = { lat_min: 23.648, lat_max: 23.672, lon_min: 86.435, lon_max: 86.468 };
+
+function geoToTwinCoordinates(latitude, longitude, elevationOrDepth = null) {
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return { position: null, georeferenced: false, reason: 'Invalid or missing coordinates' };
+    }
+    const inBounds = (
+        latitude >= GEO_BOUNDS.lat_min && latitude <= GEO_BOUNDS.lat_max &&
+        longitude >= GEO_BOUNDS.lon_min && longitude <= GEO_BOUNDS.lon_max
+    );
+
+    if (!inBounds) {
+        return {
+            position: null,
+            georeferenced: false,
+            reason: 'Local mine model frame (~2 km). Regional Jharia placement requires surveyed CRS origin.'
+        };
+    }
+
+    const x = -22 + 115 * (longitude - GEO_BOUNDS.lon_min) / (GEO_BOUNDS.lon_max - GEO_BOUNDS.lon_min);
+    const z = 100 - 68 * (latitude - GEO_BOUNDS.lat_min) / (GEO_BOUNDS.lat_max - GEO_BOUNDS.lat_min);
+    const y = elevationOrDepth !== null ? elevationOrDepth : surface(x, z);
+
+    return {
+        position: [x, y, z],
+        georeferenced: true,
+        reason: 'Deterministically mapped to local mine frame'
+    };
+}
+
+function updateNodes(snapshot){
+    const ids=new Set(snapshot.nodes.map(n=>n.node_id));
+    for(const [id,item] of nodeObjects)if(!ids.has(id)){scene.remove(item.root,item.label);item.label.material.map.dispose();item.label.material.dispose();nodeObjects.delete(id);}
+    for(const node of snapshot.nodes){
+        if (!node.position) continue;
+        const color=node.status==='ONLINE'?COLORS[node.risk_level]:COLORS.OFFLINE;let item=nodeObjects.get(node.node_id);
+        if(!item){const root=hardware(node.node_type==='crack'?'CRACK_TEMPLATE':'GROUND_TEMPLATE');const label=makeLabel(node.node_id,color);label.scale.set(6,2.06,1);scene.add(label);item={root,label,color};nodeObjects.set(node.node_id,item);}
+        if(item.color!==color){const label=makeLabel(node.node_id,color);item.label.material.map.dispose();item.label.material.map=label.material.map;label.material.dispose();item.color=color;}
+        const [x,,z]=node.position;item.root.position.set(x,surface(x,z),z);item.root.rotation.set(THREE.MathUtils.degToRad(node.tilt_x||0),0,-THREE.MathUtils.degToRad(node.tilt_y||0));
+        item.label.position.set(x,surface(x,z)+4.1,z);item.label.visible=$('twin-markers').checked;item.label.userData.nodeId=node.node_id;
+        item.root.traverse(part=>{part.userData.nodeId=node.node_id;if(!part.isMesh)return;const role=part.userData.role;
+            if(role==='led'){part.material.color.set(color);part.material.emissive.set(color);part.material.emissiveIntensity=.9;}
+            if(role==='battery'){if(node.battery==null)part.material.color.set('#657689');else part.material.color.setRGB(1-node.battery/100,node.battery/100,.03);}
+            if(role==='link')part.material.color.set(node.status==='ONLINE'?'#498eea':'#657689');
+            if(role==='anchor_b')part.position.set(.564643*(node.displacement_mm||0)*state.gain/1000,0,.825335*(node.displacement_mm||0)*state.gain/1000);
         });
     }
-    const select=$('twin-node-select');if(Array.from(select.options).map(o=>o.value).join('|')!==snapshot.nodes.map(n=>n.node_id).join('|')){
-        select.replaceChildren(...snapshot.nodes.map(node=>new Option(node.node_id,node.node_id)));
+    const select=$('twin-node-select');
+    const recNodes = window.TerraVeilState?.recommendedNodes || [];
+    const allIds = [...snapshot.nodes.map(n=>n.node_id), ...recNodes.map(r=>r.id)];
+    
+    if(Array.from(select.options).map(o=>o.value).join('|')!==allIds.join('|')){
+        select.replaceChildren();
+        if (snapshot.nodes.length) {
+            const optgroupHost = document.createElement('optgroup');
+            optgroupHost.label = 'Active Field Sensors';
+            snapshot.nodes.forEach(node => optgroupHost.appendChild(new Option(node.node_id, node.node_id)));
+            select.appendChild(optgroupHost);
+        }
+        if (recNodes.length) {
+            const optgroupRec = document.createElement('optgroup');
+            optgroupRec.label = 'Recommended Planning Anchors (InSAR)';
+            recNodes.forEach(node => optgroupRec.appendChild(new Option(`${node.id} (Zone ${node.zone_id})`, node.id)));
+            select.appendChild(optgroupRec);
+        }
     }
-    if(!ids.has(state.selected))state.selected=snapshot.nodes.find(n=>n.node_type==='crack')?.node_id||snapshot.nodes[0]?.node_id||null;
+    if(!allIds.includes(state.selected))state.selected=snapshot.nodes.find(n=>n.node_type==='crack')?.node_id||snapshot.nodes[0]?.node_id||recNodes[0]?.id||null;
     select.value=state.selected||'';
 }
 const sirenLocations=[[-95,81],[-6,-29],[76,32],[-55,-75],[83,-84],[-95,-22],[44,10],[15,-17]];
@@ -209,6 +271,23 @@ function applySnapshot(snapshot){
     $('twin-scene-metrics').textContent=`${snapshot.nodes.length} nodes · ${snapshot.zones.length} correlated regions`;$('twin-node-count').textContent=`${snapshot.nodes.length} nodes`;
 }
 function showSelected(){
+    const recNode = window.TerraVeilState?.recommendedNodes?.find(r => r.id === state.selected);
+    if (recNode) {
+        // Render Recommended Planning Node in Inspector
+        $('twin-node-id').textContent = `${recNode.id} (Zone ${recNode.zone_id})`;
+        $('twin-node-risk').textContent = recNode.status === 'field_reviewed' ? 'FIELD REVIEWED' : 'RECOMMENDED';
+        $('twin-node-risk').style.color = recNode.status === 'field_reviewed' ? '#8b5cf6' : '#06b6d4';
+        $('twin-node-type').textContent = `InSAR Planning Anchor • Rank #${recNode.priority_rank}`;
+        $('twin-reading-risk').textContent = `${(recNode.priority_score * 100).toFixed(1)} / 100`;
+        $('twin-reading-tilt').textContent = `LOS: ${recNode.median_velocity_mm_year.toFixed(1)} mm/yr`;
+        $('twin-reading-vibration').textContent = `Worst: ${recNode.worst_velocity_mm_year.toFixed(1)} mm/yr`;
+        $('twin-reading-crack').textContent = `Disp: ${recNode.median_net_displacement_mm.toFixed(1)} mm`;
+        $('twin-reading-battery').textContent = 'Surface Projection (depth: null)';
+        const adapter = geoToTwinCoordinates(recNode.latitude, recNode.longitude);
+        $('twin-reading-link').textContent = `${recNode.latitude.toFixed(4)}°, ${recNode.longitude.toFixed(4)}° · ${adapter.reason}`;
+        return;
+    }
+
     const node=state.snapshot?.nodes.find(n=>n.node_id===state.selected);if(!node)return;
     $('twin-node-id').textContent=node.node_id;$('twin-node-risk').textContent=node.status==='ONLINE'?node.risk_level:node.status;
     $('twin-node-risk').style.color=node.status==='ONLINE'?COLORS[node.risk_level]:COLORS.OFFLINE;
@@ -223,7 +302,13 @@ function showSelected(){
 function pickNode(event){
     const rect=renderer.domElement.getBoundingClientRect();pointer.set((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(pointer,camera);
     const targets=[...nodeObjects.values()].flatMap(item=>[item.root,...($('twin-markers').checked?[item.label]:[])]);
-    const hit=raycaster.intersectObjects(targets,true).find(item=>item.object.userData.nodeId);if(hit){state.selected=hit.object.userData.nodeId;$('twin-node-select').value=state.selected;showSelected();}
+    const hit=raycaster.intersectObjects(targets,true).find(item=>item.object.userData.nodeId);
+    if(hit){
+        state.selected=hit.object.userData.nodeId;
+        $('twin-node-select').value=state.selected;
+        showSelected();
+        window.NodePlacementEngine?.selectNode(state.selected, 'twin_scene');
+    }
 }
 
 async function pollHost(){
@@ -257,7 +342,11 @@ function animate(now){
 $('twin-host').addEventListener('click',()=>source('host'));$('twin-demo').addEventListener('click',()=>source('demo'));
 document.querySelectorAll('[data-twin-camera]').forEach(button=>button.addEventListener('click',()=>cameraView(button.dataset.twinCamera)));
 $('twin-tour').addEventListener('click',()=>state.tour===null?startTour():stopTour());
-$('twin-node-select').addEventListener('change',event=>{state.selected=event.target.value;showSelected();});
+$('twin-node-select').addEventListener('change',event=>{
+    state.selected=event.target.value;
+    showSelected();
+    window.NodePlacementEngine?.selectNode(state.selected, 'twin_inspector');
+});
 $('twin-focus-node').addEventListener('click',()=>{const item=nodeObjects.get(state.selected);if(!item)return;stopTour();controls.target.copy(item.root.position).add(new THREE.Vector3(0,1,0));camera.position.copy(item.root.position).add(new THREE.Vector3(7,5,10));controls.update();});
 $('twin-forest').addEventListener('change',event=>{if(forest)forest.visible=event.target.checked;});
 $('twin-risk').addEventListener('change',event=>riskMeshes.forEach(mesh=>mesh.visible=event.target.checked));
@@ -266,3 +355,16 @@ $('twin-gain').addEventListener('input',event=>{state.gain=Number(event.target.v
 $('twin-play').addEventListener('click',()=>{if(state.time>=44)state.time=0;state.playing=!state.playing;lastDemo=-1;applyDemo();});
 $('twin-time').addEventListener('input',event=>{state.playing=false;state.time=Number(event.target.value);applyDemo();});
 window.addEventListener('pagehide',()=>{controls?.dispose();renderer?.dispose();});
+
+// Global Synchronization Listeners for Digital Twin
+window.addEventListener('terraveil:nodes-updated', () => {
+    if (state.ready && state.snapshot) updateNodes(state.snapshot);
+});
+window.addEventListener('terraveil:node-selected', (e) => {
+    if (state.ready) {
+        state.selected = e.detail?.nodeId;
+        const select = $('twin-node-select');
+        if (select) select.value = state.selected || '';
+        showSelected();
+    }
+});

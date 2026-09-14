@@ -20,6 +20,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/digital-twin.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/insar.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/insar-zones.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/node-placement.css') }}">
     <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -66,6 +68,10 @@
                 <a href="#" class="nav-link" data-target="view-network">
                     <span class="nav-icon">⌁</span>
                     <span>Sensor Network</span>
+                </a>
+                <a href="#" class="nav-link" data-target="view-placement" id="nav-link-placement">
+                    <span class="nav-icon">🎯</span>
+                    <span>Node Placement</span>
                 </a>
             </div>
 
@@ -231,6 +237,23 @@
                             </div>
                             <div class="map-controls-group">
                                 <span class="live-tag">● LIVE</span>
+                                <div class="map-btn-group">
+                                    <button type="button" class="map-control-chip active" id="btn-toggle-insar-layer" title="Toggle 27 Jharia InSAR Subsidence Hotspot Footprints">
+                                        <span class="chip-dot"></span> InSAR Zones (27)
+                                    </button>
+                                    <button type="button" class="map-control-chip" id="btn-toggle-insar-table" title="Toggle InSAR Subsidence Zones Data Table">
+                                        <span class="chip-icon">📊</span> Table
+                                    </button>
+                                    <button type="button" class="map-control-chip" id="btn-fit-jharia" title="Fit map view to Jharia InSAR Subsidence Footprints">
+                                        <span class="chip-icon">⛶</span> Jharia Extent
+                                    </button>
+                                    <button type="button" class="map-control-chip" id="btn-toggle-placement-panel" title="Node Placement Recommendation Engine">
+                                        <span class="chip-icon">🎯</span> Placement AI
+                                    </button>
+                                    <button type="button" class="map-control-chip active" id="btn-toggle-placement-layer" title="Toggle Recommended Node Locations Layer">
+                                        <span class="chip-icon">◈</span> Anchors (<span id="placement-count-badge">0</span>)
+                                    </button>
+                                </div>
                                 <div class="map-legend">
                                     <span class="legend-item"><span class="legend-dot bg-green"></span>Normal</span>
                                     <span class="legend-item"><span class="legend-dot bg-amber"></span>Warning</span>
@@ -239,6 +262,8 @@
                             </div>
                         </div>
                         <div id="map"></div>
+                        <div id="insar-zones-drawer" class="insar-zones-drawer collapsed"></div>
+                        <div id="node-placement-panel" class="node-placement-drawer collapsed"></div>
                     </div>
 
                     <!-- Right: Selected Node Sidebar -->
@@ -315,6 +340,7 @@
                  ========================================== -->
             {% include 'digital_twin.html' %}
             {% include 'insar.html' %}
+            {% include 'node_placement.html' %}
             <div id="view-history" class="tab-view hidden">
                 <div class="history-page card">
                     <div class="panel-header">
@@ -752,5 +778,7 @@
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/digital-twin.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/insar.js') }}"></script>
+<script src="{{ url_for('static', filename='js/insar-zones.js') }}"></script>
+<script src="{{ url_for('static', filename='js/node-placement.js') }}"></script>
 </body>
 </html>

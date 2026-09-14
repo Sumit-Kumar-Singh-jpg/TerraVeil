@@ -19,9 +19,12 @@ let spatialClusters = []; // Active deformation zones
 // Leaflet map initialization
 const map = L.map("map", {
     zoomControl: true,
-    minZoom: 12,
+    minZoom: 10,
     maxZoom: 17
 }).setView([23.657, 86.452], 14);
+
+window.map = map;
+window.dispatchEvent(new CustomEvent('terraveil:map-ready', { detail: { map } }));
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors"
@@ -64,6 +67,11 @@ document.querySelectorAll(".nav-link").forEach(link => {
         // Trigger historical dropdown load if switching to history tab
         if (target === "view-history") {
             populateHistoricalDropdowns();
+        }
+
+        // If switching to placement tab, render placement section
+        if (target === "view-placement") {
+            window.NodePlacementEngine?.recompute();
         }
     });
 });

@@ -6,6 +6,7 @@ if __name__ == '__main__':
     except RuntimeError as error:
         raise SystemExit(str(error))
 
+from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from datetime import datetime
 
@@ -139,6 +140,15 @@ def twin_asset(filename):
         response.headers['Content-Encoding'] = 'gzip'
     response.headers['Vary'] = 'Accept-Encoding'
     return response
+
+
+@app.route('/map/<filename>')
+def map_asset(filename):
+    if filename not in ('jharia_subsidence_zones.geojson', 'jharia_subsidence_zones.csv'):
+        return jsonify(error='Unknown map asset'), 404
+    folder = Path(__file__).parent / 'map'
+    mimetype = 'application/geo+json' if filename.endswith('.geojson') else 'text/csv'
+    return send_from_directory(folder, filename, mimetype=mimetype)
 
 
 @app.route("/api/history/<node_id>")

@@ -1,0 +1,182 @@
+<div id="view-placement" class="tab-view hidden">
+    <!-- Header & Action Controls -->
+    <div class="placement-page-header">
+        <div class="placement-page-title-group">
+            <span class="panel-eyebrow" style="color:#06B6D4;">DECISION SUPPORT SYSTEM</span>
+            <h2>
+                <span>🎯</span>
+                <span>Node Placement Recommendations</span>
+            </h2>
+            <p>Satellite-guided monitoring coverage optimization across Jharia coalfield InSAR subsidence hotspots.</p>
+        </div>
+        <div class="placement-page-actions">
+            <button type="button" class="btn-placement-action btn-placement-generate" id="btn-placement-recompute">
+                <span>🔄 Recompute</span>
+            </button>
+            <button type="button" class="btn-placement-primary" id="btn-placement-export">
+                <span>📥 Export GeoJSON</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- KPI Summary Analysis Strip -->
+    <div class="placement-kpi-grid">
+        <div class="placement-kpi-card">
+            <span class="placement-kpi-label">Zones Analysed</span>
+            <div class="placement-kpi-value" id="kpi-placement-analysed">27</div>
+            <span class="placement-kpi-sub">Sentinel-1 InSAR Hotspots</span>
+        </div>
+        <div class="placement-kpi-card">
+            <span class="placement-kpi-label">Deployment Mode</span>
+            <div class="placement-kpi-value" id="kpi-placement-mode" style="font-size:16px;">Budget-Constrained</div>
+            <span class="placement-kpi-sub">Coverage Optimization</span>
+        </div>
+        <div class="placement-kpi-card">
+            <span class="placement-kpi-label">Recommended Planning Nodes</span>
+            <div class="placement-kpi-value" id="kpi-placement-nodes" style="color:#06B6D4;">10</div>
+            <span class="placement-kpi-sub">Planning deployment</span>
+        </div>
+        <div class="placement-kpi-card">
+            <span class="placement-kpi-label">Zones Covered</span>
+            <div class="placement-kpi-value" id="kpi-placement-covered">9 / 27</div>
+            <span class="placement-kpi-sub">High-risk hotspots</span>
+        </div>
+        <div class="placement-kpi-card">
+            <span class="placement-kpi-label">Highest Priority Zone</span>
+            <div class="placement-kpi-value" id="kpi-placement-highest" style="font-size:15px; color:#EF4444;">Zone 10</div>
+            <span class="placement-kpi-sub">Score: 0.954 (Rank #1)</span>
+        </div>
+        <div class="placement-kpi-card">
+            <span class="placement-kpi-label">Hotspot Area Represented</span>
+            <div class="placement-kpi-value" id="kpi-placement-area">6.72 km²</div>
+            <span class="placement-kpi-sub">Active deformation area</span>
+        </div>
+    </div>
+
+    <!-- Deployment Configuration Panel -->
+    <div class="placement-config-card">
+        <div class="config-card-header">
+            <h3><span>⚙</span> Deployment Parameters & Mode</h3>
+            <span style="font-size:11px; color:var(--text-muted);">Configurable algorithmic constraints</span>
+        </div>
+        <div class="config-form-grid">
+            <!-- Mode Switch -->
+            <div class="config-control-group">
+                <span class="config-label">
+                    <span>Optimization Mode</span>
+                    <span style="font-size:9.5px; color:var(--text-muted);">Auto vs Budget-constrained</span>
+                </span>
+                <div class="config-mode-switch">
+                    <button type="button" class="config-mode-btn" id="placement-mode-auto">Auto Recommendation</button>
+                    <button type="button" class="config-mode-btn active" id="placement-mode-budget">Budget-Constrained</button>
+                </div>
+            </div>
+
+            <!-- Node Budget Options -->
+            <div class="config-control-group" id="placement-budget-options">
+                <span class="config-label">
+                    <span>Available Node Budget</span>
+                    <span style="font-size:9.5px; color:var(--text-muted);">Hardware sensor count</span>
+                </span>
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <div class="preset-chip-list">
+                        <button type="button" class="preset-chip" data-budget="5">5</button>
+                        <button type="button" class="preset-chip active" data-budget="10">10</button>
+                        <button type="button" class="preset-chip" data-budget="25">25</button>
+                        <button type="button" class="preset-chip" data-budget="40">40</button>
+                        <button type="button" class="preset-chip" data-budget="60">60</button>
+                    </div>
+                    <div class="custom-budget-input-wrapper">
+                        <input type="number" id="input-custom-budget" class="placement-input-number" min="1" max="60" value="10" placeholder="Custom">
+                        <button type="button" class="preset-chip" id="btn-apply-custom-budget">Apply</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Planning Spacing -->
+            <div class="config-control-group">
+                <span class="config-label">
+                    <span>Planning Spacing (not sensing radius)</span>
+                    <strong id="placement-spacing-display" style="font-family:'JetBrains Mono',monospace; color:var(--text-primary);">200m</strong>
+                </span>
+                <input type="range" class="slider-input" id="placement-spacing-slider" min="100" max="500" step="25" value="200">
+                <span style="font-size:9.5px; color:var(--text-muted);">Minimum spatial separation buffer between coverage anchors.</span>
+            </div>
+
+            <!-- Max Nodes Per Zone -->
+            <div class="config-control-group">
+                <span class="config-label">
+                    <span>Max Nodes Per Zone</span>
+                    <strong id="placement-maxnodes-display" style="font-family:'JetBrains Mono',monospace; color:var(--text-primary);">3</strong>
+                </span>
+                <input type="range" class="slider-input" id="placement-maxnodes-slider" min="1" max="5" step="1" value="3">
+                <span style="font-size:9.5px; color:var(--text-muted);">Prevents over-concentration of scarce hardware sensors.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Workbench: Interactive Table & Inspection Panel -->
+    <div class="placement-workbench">
+        <!-- Left: Full Recommendations Table -->
+        <div class="placement-table-card">
+            <div class="table-toolbar">
+                <div class="table-filter-group">
+                    <input type="text" id="placement-table-search" class="table-search-input" placeholder="Search Node ID, Zone...">
+                    <select id="placement-table-severity" class="custom-select-small">
+                        <option value="ALL">All Severities</option>
+                        <option value="CRITICAL">Critical (≤ -85 mm/yr)</option>
+                        <option value="SEVERE">Severe (-85 to -80 mm/yr)</option>
+                        <option value="HIGH">High (-80 to -75 mm/yr)</option>
+                        <option value="ELEVATED">Elevated (> -75 mm/yr)</option>
+                    </select>
+                </div>
+                <div style="font-size:10.5px; color:var(--text-muted);">
+                    Click any row to inspect explainability • Action buttons switch view
+                </div>
+            </div>
+            <div class="table-scroll-container">
+                <table class="placement-full-table" id="placement-full-table">
+                    <thead>
+                        <tr>
+                            <th data-sort="id">Node ID ⬍</th>
+                            <th data-sort="zone_id">Zone ⬍</th>
+                            <th data-sort="latitude">Latitude ⬍</th>
+                            <th data-sort="longitude">Longitude ⬍</th>
+                            <th data-sort="priority_rank">Rank ⬍</th>
+                            <th data-sort="priority_score">Priority ⬍</th>
+                            <th data-sort="median_velocity_mm_year">LOS Vel ⬍</th>
+                            <th data-sort="confidence">Confidence ⬍</th>
+                            <th data-sort="status">Status ⬍</th>
+                            <th>Cross-View Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="placement-full-tbody">
+                        <!-- Populated dynamically by node-placement.js -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Right: Detail & Explainability Panel -->
+        <div class="placement-preview-card">
+            <div class="panel-header" style="padding:10px 14px; border-bottom:1px solid var(--border-color);">
+                <span class="panel-eyebrow" style="color:#06B6D4;">LOCATION EXPLAINABILITY</span>
+                <h3 style="font-size:13px; margin:2px 0 0 0;">Candidate Anchor Justification</h3>
+            </div>
+            <div class="preview-detail-panel" id="preview-detail-panel">
+                <div style="color:var(--text-muted); font-style:italic;">
+                    Select any recommended monitoring location from the table or preview map to inspect detailed InSAR explainability.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Professional Disclaimer Banner -->
+    <div class="placement-disclaimer-card">
+        <span style="font-size:18px;">ℹ️</span>
+        <div>
+            <strong>Operational Engineering Disclaimer:</strong>
+            Recommended monitoring locations are generated from InSAR deformation priority and spatial coverage. Final underground installation coordinates and depth require mine-layout, accessibility, geotechnical and field validation.
+        </div>
+    </div>
+</div>

@@ -1,0 +1,550 @@
+/* ==========================================================================
+   TERRAVEIL InSAR SUBSIDENCE ZONES STYLESHEET
+   Supports Dual Theme (Dark & Light Industrial)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. MAP CONTROLS & TOGGLES
+   -------------------------------------------------------------------------- */
+.map-btn-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.map-control-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-card);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.map-control-chip:hover {
+    background-color: var(--bg-card-hover);
+    color: var(--text-primary);
+    border-color: var(--accent-border);
+}
+
+.map-control-chip.active {
+    background-color: var(--accent-bg);
+    color: var(--accent);
+    border-color: var(--accent-border);
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.2);
+}
+
+.map-control-chip .chip-icon {
+    font-size: 11px;
+}
+
+.map-control-chip .chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--status-red);
+}
+
+/* --------------------------------------------------------------------------
+   2. COLLAPSIBLE MAP LEGEND
+   -------------------------------------------------------------------------- */
+.insar-map-legend {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--radius-sm) !important;
+    box-shadow: var(--shadow-md) !important;
+    color: var(--text-primary) !important;
+    font-family: 'Inter', sans-serif !important;
+    padding: 8px 10px !important;
+    min-width: 175px;
+    max-width: 220px;
+    backdrop-filter: blur(8px);
+    transition: all 0.2s ease;
+    pointer-events: auto;
+    margin-bottom: 24px !important;
+    margin-left: 12px !important;
+}
+
+.insar-map-legend .legend-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+    cursor: pointer;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.insar-map-legend .legend-toggle-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.insar-map-legend .legend-toggle-btn:hover {
+    color: var(--text-primary);
+}
+
+.insar-map-legend .legend-content {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 6px;
+}
+
+.insar-map-legend.collapsed .legend-content {
+    display: none;
+}
+
+.insar-map-legend .legend-unit {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 2px;
+}
+
+.insar-map-legend .legend-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    gap: 6px;
+}
+
+.insar-map-legend .legend-row-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.insar-map-legend .legend-swatch {
+    width: 12px;
+    height: 9px;
+    border-radius: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.insar-map-legend .swatch-critical { background-color: #DC2626; }
+.insar-map-legend .swatch-severe   { background-color: #EA580C; }
+.insar-map-legend .swatch-high     { background-color: #D97706; }
+.insar-map-legend .swatch-elevated { background-color: #3B82F6; }
+
+.insar-map-legend .legend-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: var(--text-secondary);
+}
+
+.insar-map-legend .legend-disclaimer {
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border-subtle);
+    font-size: 8px;
+    color: var(--text-dim);
+    line-height: 1.25;
+}
+
+/* --------------------------------------------------------------------------
+   3. LEAFLET CUSTOM POPUP FOR InSAR ZONES
+   -------------------------------------------------------------------------- */
+.leaflet-popup-content-wrapper {
+    background-color: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: var(--shadow-md) !important;
+    padding: 0 !important;
+    overflow: hidden;
+}
+
+.leaflet-popup-tip {
+    background-color: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+}
+
+.leaflet-popup-close-button {
+    color: var(--text-muted) !important;
+    top: 8px !important;
+    right: 8px !important;
+    font-size: 16px !important;
+}
+
+.leaflet-popup-close-button:hover {
+    color: var(--text-primary) !important;
+}
+
+.insar-popup {
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    max-width: 320px;
+    min-width: 280px;
+}
+
+.insar-popup-header {
+    background-color: var(--bg-input);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.insar-popup-title-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.insar-popup-eyebrow {
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.insar-popup-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-top: 1px;
+}
+
+.insar-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.badge-critical {
+    background-color: rgba(220, 38, 38, 0.15);
+    color: #EF4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.badge-severe {
+    background-color: rgba(234, 88, 12, 0.15);
+    color: #F97316;
+    border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
+.badge-high {
+    background-color: rgba(217, 119, 6, 0.15);
+    color: #F59E0B;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.badge-elevated {
+    background-color: rgba(59, 130, 246, 0.15);
+    color: #60A5FA;
+    border: 1px solid rgba(96, 165, 250, 0.4);
+}
+
+.insar-popup-body {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.insar-popup-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.insar-popup-section-title {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.insar-popup-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 8px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+}
+
+.insar-popup-grid.single-col {
+    grid-template-columns: 1fr;
+}
+
+.insar-metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 10.5px;
+}
+
+.insar-metric-label {
+    color: var(--text-secondary);
+    font-size: 9.5px;
+}
+
+.insar-metric-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.insar-metric-val.highlight-critical { color: #EF4444; }
+.insar-metric-val.highlight-severe   { color: #F97316; }
+.insar-metric-val.highlight-high     { color: #F59E0B; }
+.insar-metric-val.highlight-elevated { color: #60A5FA; }
+
+.insar-popup-footer {
+    padding: 6px 12px 8px 12px;
+    background-color: var(--bg-input);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+}
+
+.insar-popup-disclaimer {
+    font-size: 8px;
+    color: var(--text-dim);
+    line-height: 1.2;
+    flex: 1;
+}
+
+.insar-popup-btn {
+    padding: 3px 6px;
+    font-size: 9px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-card);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+}
+
+.insar-popup-btn:hover {
+    background-color: var(--bg-card-hover);
+    color: var(--text-primary);
+    border-color: var(--accent-border);
+}
+
+/* --------------------------------------------------------------------------
+   4. InSAR SUMMARY TABLE DRAWER
+   -------------------------------------------------------------------------- */
+.insar-zones-drawer {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    margin-top: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-card);
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+    max-height: 380px;
+}
+
+.insar-zones-drawer.collapsed {
+    display: none;
+}
+
+.drawer-header {
+    background-color: var(--bg-input);
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.drawer-title-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.drawer-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+}
+
+.drawer-stats-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.drawer-pill {
+    font-size: 9px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+}
+
+.drawer-pill.pill-crit {
+    color: #EF4444;
+    border-color: rgba(239, 68, 68, 0.35);
+}
+
+.drawer-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    transition: all 0.15s ease;
+}
+
+.drawer-close-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-card);
+}
+
+.insar-table-wrapper {
+    overflow-y: auto;
+    max-height: 240px;
+}
+
+.insar-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+    text-align: left;
+}
+
+.insar-table th {
+    position: sticky;
+    top: 0;
+    background-color: var(--bg-header);
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: color 0.15s ease;
+    z-index: 2;
+}
+
+.insar-table th:hover {
+    color: var(--text-primary);
+}
+
+.insar-table th .sort-arrow {
+    display: inline-block;
+    margin-left: 3px;
+    font-size: 8px;
+    opacity: 0.4;
+}
+
+.insar-table th.sorted .sort-arrow {
+    opacity: 1;
+    color: var(--accent);
+}
+
+.insar-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-family: 'Inter', sans-serif;
+    white-space: nowrap;
+}
+
+.insar-table tr {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.insar-table tr:hover {
+    background-color: var(--bg-card-hover);
+}
+
+.insar-table tr.insar-row-selected {
+    background-color: var(--accent-bg) !important;
+    color: var(--text-primary);
+}
+
+.insar-table tr.insar-row-selected td {
+    border-bottom-color: var(--accent-border);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.insar-table .cell-mono {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.insar-table .cell-crit {
+    color: #EF4444;
+    font-weight: 700;
+}
+
+.insar-table .cell-sev {
+    color: #F97316;
+    font-weight: 700;
+}
+
+.insar-table .cell-hi {
+    color: #F59E0B;
+    font-weight: 600;
+}
+
+.insar-table .cell-elev {
+    color: #60A5FA;
+    font-weight: 500;
+}
+
+.insar-table-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background-color: var(--bg-input);
+    border-top: 1px solid var(--border-subtle);
+    font-size: 9px;
+    color: var(--text-muted);
+}

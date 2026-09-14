@@ -12,6 +12,32 @@ const palettes = {
     height: ['#304f57', '#8eac83', '#eee0b5'],
     coherence: ['#34334f', '#489599', '#c9e4b2'],
 };
+
+// --- Recommended 3D Nodes Integration ---
+let recommendedNodesGroup = null;
+const node3DObjects = [];
+const node3DLookup = new Map(); // nodeId -> 3D Object
+
+function wgs84ToUtm45N(lat, lon) {
+    const a = 6378137.0;
+    const f = 1 / 298.257223563;
+    const e2 = 2 * f - f * f;
+    const k0 = 0.9996;
+    const lon0 = 87.0;
+    const latRad = lat * Math.PI / 180.0;
+    const lonRad = (lon - lon0) * Math.PI / 180.0;
+    const N = a / Math.sqrt(1 - e2 * Math.sin(latRad) * Math.sin(latRad));
+    const T = Math.tan(latRad) * Math.tan(latRad);
+    const C = (e2 / (1 - e2)) * Math.cos(latRad) * Math.cos(latRad);
+    const A = Math.cos(latRad) * lonRad;
+    const M = a * ((1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256) * latRad
+        - (3 * e2 / 8 + 3 * e2 * e2 / 32 + 45 * e2 * e2 * e2 / 1024) * Math.sin(2 * latRad)
+        + (15 * e2 * e2 / 256 + 45 * e2 * e2 * e2 / 1024) * Math.sin(4 * latRad)
+        - (35 * e2 * e2 * e2 / 3072) * Math.sin(6 * latRad));
+    const easting = 500000.0 + k0 * N * (A + (1 - T + C) * Math.pow(A, 3) / 6 + (5 - 18 * T + T * T + 72 * C - 58 * (e2 / (1 - e2))) * Math.pow(A, 5) / 120);
+    const northing = k0 * (M + N * Math.tan(latRad) * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * Math.pow(A, 4) / 24 + (61 - 58 * T + T * T + 600 * C - 330 * (e2 / (1 - e2))) * Math.pow(A, 6) / 720));
+    return { easting, northing };
+}
 const colors = Object.fromEntries(Object.entries(palettes).map(([k, v]) => [k, v.map(c => new THREE.Color(c))]));
 const missing = new THREE.Color('#53616a');
 const number = (n, digits = 2) => n.toLocaleString(undefined, {minimumFractionDigits:digits, maximumFractionDigits:digits});
@@ -60,7 +86,7 @@ async function initialize() {
             if (hash !== manifest.asset.sha256) throw new Error('Terrain checksum mismatch. Please rebuild or refresh the dataset.');
         }
         samples = new Float32Array(buffer);
-        createScene(); fillMetadata(); updateLayer(); setCamera(false);
+        createScene(); fillMetadata(); updateLayer(); setCamera(false); update3DRecommendedNodes();
         ready = true; stage.dataset.ready = 'true';
         inspect(Math.floor(g.rows / 2), Math.floor(g.columns / 2));
         $('insar-loading').hidden = true;
@@ -112,6 +138,9 @@ function createScene() {
     grid.position.y = -.1; scene.add(grid);
     marker = new THREE.Mesh(new THREE.SphereGeometry(.16,16,10), new THREE.MeshBasicMaterial({color:'#ffffff',depthTest:false}));
     marker.renderOrder = 5; scene.add(marker);
+    recommendedNodesGroup = new THREE.Group();
+    recommendedNodesGroup.name = 'Recommended Monitoring Nodes 3D Surface Projections';
+    scene.add(recommendedNodesGroup);
     const northZ = -(g.y_first-centerNorth)/1000;
     const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(span*.54,0,northZ+5), 4, '#86b8cf', .6,.45); scene.add(arrow);
     label('N', span*.54, .5, northZ, 2.5);
@@ -121,6 +150,20 @@ function createScene() {
         if (event.button !== 0 || !pointerStart || Math.hypot(event.clientX-pointerStart[0],event.clientY-pointerStart[1])>5) return;
         const rect = renderer.domElement.getBoundingClientRect();
         ray.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1, -(event.clientY-rect.top)/rect.height*2+1), camera);
+        
+        // 1. Raycast recommended 3D node markers first
+        const nodeHits = ray.intersectObjects(node3DObjects, true);
+        if (nodeHits.length > 0) {
+            const hitObj = nodeHits.find(h => h.object.userData.nodeId);
+            if (hitObj) {
+                const nid = hitObj.object.userData.nodeId;
+                window.NodePlacementEngine?.selectNode(nid, '3d_map');
+                highlight3DNode(nid);
+                return;
+            }
+        }
+
+        // 2. Raycast terrain surface
         const hit = ray.intersectObject(terrain)[0];
         if (!hit) return;
         const c = Math.round((hit.point.x*1000+centerEast-g.x_first)/g.x_step);
@@ -136,6 +179,82 @@ function createScene() {
         controls.update(); renderer.render(scene,camera);
     });
     stage.dataset.triangles = String(indices.length/3);
+}
+
+function update3DRecommendedNodes() {
+    if (!scene || !ready) return;
+    if (!recommendedNodesGroup) {
+        recommendedNodesGroup = new THREE.Group();
+        scene.add(recommendedNodesGroup);
+    }
+
+    while (recommendedNodesGroup.children.length > 0) {
+        const obj = recommendedNodesGroup.children[0];
+        recommendedNodesGroup.remove(obj);
+        obj.geometry?.dispose();
+        obj.material?.dispose();
+    }
+    node3DObjects.length = 0;
+    node3DLookup.clear();
+
+    const nodes = window.TerraVeilState?.recommendedNodes || [];
+    const g = manifest.grid;
+
+    nodes.forEach(node => {
+        const { easting, northing } = wgs84ToUtm45N(node.latitude, node.longitude);
+        const col = Math.round((easting - g.x_first) / g.x_step);
+        const row = Math.round((northing - g.y_first) / g.y_step);
+
+        let elev = floor;
+        if (row >= 0 && row < g.rows && col >= 0 && col < g.columns) {
+            const idx = (row * g.columns + col) * 7;
+            if (samples[idx + 6] & 1) {
+                elev = samples[idx];
+            }
+        }
+
+        const posX = (easting - centerEast) / 1000;
+        const posY = (elev - floor) / 1000 * relief + 0.20;
+        const posZ = -(northing - centerNorth) / 1000;
+
+        const isSelected = window.TerraVeilState?.selectedNodeId === node.id;
+        const isReviewed = node.status === 'field_reviewed';
+        const color = isSelected ? '#ffffff' : (isReviewed ? '#8b5cf6' : '#06b6d4');
+
+        const geom = new THREE.OctahedronGeometry(0.25, 0);
+        const mat = new THREE.MeshStandardMaterial({
+            color: color,
+            emissive: color,
+            emissiveIntensity: isSelected ? 0.9 : 0.45,
+            roughness: 0.25,
+            metalness: 0.3
+        });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.set(posX, posY, posZ);
+        mesh.userData.nodeId = node.id;
+        mesh.userData.elev = elev;
+        mesh.userData.node = node;
+
+        recommendedNodesGroup.add(mesh);
+        node3DObjects.push(mesh);
+        node3DLookup.set(node.id, mesh);
+    });
+}
+
+function highlight3DNode(nodeId) {
+    node3DObjects.forEach(mesh => {
+        const isMatch = mesh.userData.nodeId === nodeId;
+        const isReviewed = mesh.userData.node?.status === 'field_reviewed';
+        const color = isMatch ? '#ffffff' : (isReviewed ? '#8b5cf6' : '#06b6d4');
+        mesh.material.color.set(color);
+        mesh.material.emissive.set(color);
+        mesh.material.emissiveIntensity = isMatch ? 1.0 : 0.45;
+        mesh.scale.setScalar(isMatch ? 1.6 : 1.0);
+
+        if (isMatch && controls) {
+            controls.target.copy(mesh.position);
+        }
+    });
 }
 
 function label(text, x, y, z, width) {
@@ -203,6 +322,7 @@ function updateRelief() {
     const position=terrain.geometry.attributes.position;
     for(let i=0;i<position.count;i++)position.setY(i,(samples[i*7]-floor)/1000*relief);
     position.needsUpdate=true;terrain.geometry.computeVertexNormals();terrain.geometry.computeBoundingSphere();
+    node3DObjects.forEach(m => { m.position.y = (m.userData.elev - floor) / 1000 * relief + 0.20; });
     if(selected!==null)inspect(Math.floor(selected/manifest.grid.columns),selected%manifest.grid.columns);
 }
 
@@ -236,3 +356,11 @@ $('insar-shade').addEventListener('change',()=>{if(!terrain)return;terrain.mater
 $('insar-oblique').onclick=()=>setCamera(false);$('insar-top').onclick=()=>setCamera(true);$('insar-reset').onclick=()=>setCamera(false);
 $('insar-pixel-form').addEventListener('submit',event=>{event.preventDefault();inspect(Number($('insar-row').value),Number($('insar-col').value));});
 if(new URLSearchParams(location.search).get('view')==='insar')activate();
+
+// Global Node Selection & Update Synchronization
+window.addEventListener('terraveil:nodes-updated', () => {
+    if (ready) update3DRecommendedNodes();
+});
+window.addEventListener('terraveil:node-selected', (e) => {
+    if (ready) highlight3DNode(e.detail?.nodeId);
+});

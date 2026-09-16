@@ -3,3 +3,4 @@ numpy>=1.26.0
 scikit-learn>=1.4.0
 gunicorn>=21.2.0
 pyserial>=3.5,<4
+pyod

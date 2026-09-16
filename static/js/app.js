@@ -150,6 +150,135 @@ function getNodeIcon(type) {
         : "/static/images/crack-node.png";
 }
 
+function isCrackNode(type) {
+    return String(type || "").toLowerCase() === "crack";
+}
+
+
+// ==========================================================================
+// REAL HARDWARE CONNECTIVITY STRIP
+// ==========================================================================
+
+function updateHardwareConnectivity(system) {
+
+    const strip =
+        document.getElementById("real-hardware-strip");
+
+    if (!strip) return;
+
+    // Don't show the physical 3-node strip in simulation mode.
+    if (currentMode !== "REAL") {
+        strip.style.display = "none";
+        return;
+    }
+
+    strip.style.display = "grid";
+
+
+    // ----------------------------------------------------------
+    // HOST-01 USB connection
+    // ----------------------------------------------------------
+
+    const host =
+        document.getElementById("conn-host");
+
+    const hostOnline =
+        system?.usb?.status === "OPEN";
+
+    if (host) {
+        host.innerHTML = `
+            <div style="font-weight:700;">
+                HOST-01
+            </div>
+
+            <div style="
+                margin-top:4px;
+                color:${hostOnline ? "#10B981" : "#EF4444"};
+                font-weight:700;
+            ">
+                ● ${hostOnline ? "USB CONNECTED" : "USB OFFLINE"}
+            </div>
+
+            <div style="
+                margin-top:3px;
+                font-size:10px;
+                color:var(--text-muted);
+            ">
+                ${system?.usb?.port || "No serial port"}
+            </div>
+        `;
+    }
+
+
+    // ----------------------------------------------------------
+    // FIELD NODES
+    // ----------------------------------------------------------
+
+    const nodes = [
+        ["UG-01", "conn-ug01"],
+        ["UG-02", "conn-ug02"],
+        ["LD-01", "conn-ld01"]
+    ];
+
+    nodes.forEach(([nodeId, elementId]) => {
+
+        const element =
+            document.getElementById(elementId);
+
+        if (!element) return;
+
+        const reading =
+            latestReadings[nodeId];
+
+        const online =
+            reading?.online === true;
+
+        const rssi =
+            Number.isFinite(reading?.rssi)
+                ? `${reading.rssi.toFixed(0)} dBm`
+                : "—";
+
+        const snr =
+            Number.isFinite(reading?.snr)
+                ? `${reading.snr.toFixed(1)} dB`
+                : "—";
+
+        const sequence =
+            reading?.sequence ?? "—";
+
+        element.innerHTML = `
+            <div style="font-weight:700;">
+                ${nodeId}
+            </div>
+
+            <div style="
+                margin-top:4px;
+                color:${online ? "#10B981" : "#64748B"};
+                font-weight:700;
+            ">
+                ● ${online ? "LIVE" : "OFFLINE"}
+            </div>
+
+            <div style="
+                margin-top:3px;
+                font-size:10px;
+                color:var(--text-muted);
+            ">
+                RSSI ${rssi}
+                &nbsp;|&nbsp;
+                SNR ${snr}
+            </div>
+
+            <div style="
+                margin-top:2px;
+                font-size:10px;
+                color:var(--text-muted);
+            ">
+                Packet #${sequence}
+            </div>
+        `;
+    });
+}
 // Calculate Tilt Vector Magnitude
 function getTiltMagnitude(tx, ty) {
     if (tx == null || ty == null) return null;
@@ -333,8 +462,36 @@ function renderNodeMarker(node, reading) {
         markers[node.node_id].setIcon(customDivIcon);
     }
 
-    markers[node.node_id].bindTooltip(`${node.node_id} · ${reading?.status || 'OFFLINE'} · ${reading?.risk_level || 'UNAVAILABLE'}<br>${reading?.timestamp || 'No telemetry'}<br>RSSI ${fmt(reading?.rssi)} dBm / SNR ${fmt(reading?.snr)} dB`);
-    if (node.node_type === "crack" && node.pole_a_lat && node.pole_b_lat) {
+    const tooltipHtml = `
+        <strong>${node.node_id}</strong>
+        <br>
+        ${reading?.online ? "● LIVE" : "○ OFFLINE"}
+        ·
+        ${reading?.risk_level || "NO DATA"}
+
+        <br>
+
+        RSSI ${fmt(reading?.rssi, 0)} dBm
+        ·
+        SNR ${fmt(reading?.snr, 1)} dB
+    `;
+
+    markers[node.node_id].bindTooltip(
+        tooltipHtml,
+        {
+            permanent: currentMode === "REAL",
+            direction: "top",
+            offset: [0, -18],
+            opacity: 0.95
+        }
+    );
+    if (
+    isCrackNode(node.node_type)
+    &&
+    node.pole_a_lat
+    &&
+    node.pole_b_lat
+) {
         if (!crackLines[node.node_id]) {
             const line = L.polyline([
                 [node.pole_a_lat, node.pole_a_lon],
@@ -906,7 +1063,11 @@ function updateSensorRegistryTable() {
         const reading = latestReadings[node.node_id] || {status:'OFFLINE',risk_level:'UNAVAILABLE',battery:null,timestamp:null};
 
         if (activeFilter === "ground" && node.node_type !== "UnderGround") return;
-        if (activeFilter === "crack" && node.node_type !== "crack") return;
+        if (
+            activeFilter === "crack"
+            &&
+            !isCrackNode(node.node_type)
+        ) return;
         if (activeFilter === "high" && reading.risk_level !== "HIGH") return;
 
         const nodeLabel = node.node_type === "UnderGround" ? "Ground" : "Crack";
@@ -1325,6 +1486,7 @@ async function pollDataPipeline() {
             ` · Received: ${system.usb?.received ?? 0} · Live updates: ${system.usb?.applied ?? 0} · Duplicates: ${system.usb?.duplicates ?? 0} · Historical: ${system.usb?.historical ?? 0} · Latest received sequence: ${system.usb?.last_sequence ?? 'UNAVAILABLE'} · ${system.usb?.last_result || system.usb?.last_error || 'Waiting for telemetry'}`;
         nodesList = registered;
         latestReadings = Object.fromEntries(readingsData.map(r => [r.node_id,r]));
+        updateHardwareConnectivity(system);
         window.backendZones = twin.zones;
         selectedNodeId ||= nodesList[0]?.node_id;
         document.getElementById('kpi-active-nodes').textContent = `${readingsData.filter(r=>r.online).length} / ${nodesList.length}`;

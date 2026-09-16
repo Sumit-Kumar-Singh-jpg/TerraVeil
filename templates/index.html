@@ -182,6 +182,59 @@
 
         <!-- KPI STRIP -->
         <div style="padding:8px 16px"><label>Data source <select id="hardware-mode"><option value="REAL">REAL HARDWARE</option><option value="SIMULATION">SIMULATION</option></select></label><div id="hardware-health" role="status">Connecting to Mother Host…</div></div>
+        <!-- =========================================================
+            REAL HARDWARE CONNECTIVITY STRIP
+            Only shown when REAL HARDWARE mode is active
+        ========================================================== -->
+        <div id="real-hardware-strip"
+            style="
+                display:none;
+                grid-template-columns:repeat(4, 1fr);
+                gap:8px;
+                padding:8px 16px;
+            ">
+
+            <div id="conn-host"
+                style="
+                    border:1px solid var(--border-subtle);
+                    border-radius:6px;
+                    padding:10px;
+                    background:var(--bg-input);
+                ">
+                HOST-01
+            </div>
+
+            <div id="conn-ug01"
+                style="
+                    border:1px solid var(--border-subtle);
+                    border-radius:6px;
+                    padding:10px;
+                    background:var(--bg-input);
+                ">
+                UG-01
+            </div>
+
+            <div id="conn-ug02"
+                style="
+                    border:1px solid var(--border-subtle);
+                    border-radius:6px;
+                    padding:10px;
+                    background:var(--bg-input);
+                ">
+                UG-02
+            </div>
+
+            <div id="conn-ld01"
+                style="
+                    border:1px solid var(--border-subtle);
+                    border-radius:6px;
+                    padding:10px;
+                    background:var(--bg-input);
+                ">
+                LD-01
+            </div>
+
+        </div>
         <section class="kpi-strip">
             <div class="kpi-card">
                 <span class="kpi-label">ACTIVE NODES</span>

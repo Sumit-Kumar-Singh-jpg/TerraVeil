@@ -6,7 +6,7 @@
 
 // ============================================================
 // TERRAVEIL HOST-01 / MAIN HUB
-// LoRa receiver + parser + ACK gateway
+// Collision-free polling controller + parser + ACK gateway
 //
 // Compatible with the unified positional packet format used by all nodes:
 //
@@ -20,6 +20,10 @@
 // All packets begin with:
 //   DATA,<NODE_ID>,<SEQ>,...
 //
+// HOST-controlled channel access:
+//   POLL,<NODE_ID>
+//
+// Only the addressed node may transmit.
 // ACK returned to every VALID, KNOWN node packet:
 //   ACK,<NODE_ID>,<SEQ>
 // ============================================================
@@ -51,6 +55,13 @@
 
 const unsigned long HEALTH_PRINT_INTERVAL_MS = 30000UL;
 const unsigned long NODE_OFFLINE_AFTER_MS     = 15000UL;
+
+// One complete acquisition round begins every 5 seconds while the
+// network is healthy. Only one field node is allowed to answer at a time.
+const unsigned long POLLING_ROUND_INTERVAL_MS = 5000UL;
+const unsigned long POLL_RESPONSE_TIMEOUT_MS  = 1200UL;
+const unsigned long INTER_POLL_GUARD_MS       = 80UL;
+const unsigned long RETRY_GUARD_MS            = 150UL;
 
 const size_t MAX_PACKET_LENGTH = 255;
 const size_t MAX_CSV_FIELDS    = 20;
@@ -128,7 +139,15 @@ uint32_t unknownNodePackets   = 0;
 uint32_t ackPacketsSent       = 0;
 uint32_t ackSendFailures      = 0;
 
+uint32_t pollPacketsSent      = 0;
+uint32_t pollSendFailures     = 0;
+uint32_t pollTimeouts         = 0;
+uint32_t retryPollsSent       = 0;
+uint32_t retrySuccesses       = 0;
+uint32_t pollingRounds        = 0;
+
 unsigned long lastHealthPrint = 0;
+unsigned long lastPollingRoundStart = 0;
 
 // ============================================================
 // HELPERS
@@ -984,6 +1003,24 @@ void printNetworkHealth()
     Serial.print("ACK failures        : ");
     Serial.println(ackSendFailures);
 
+    Serial.print("Polling rounds      : ");
+    Serial.println(pollingRounds);
+
+    Serial.print("Poll packets sent   : ");
+    Serial.println(pollPacketsSent);
+
+    Serial.print("Poll TX failures    : ");
+    Serial.println(pollSendFailures);
+
+    Serial.print("Poll timeouts       : ");
+    Serial.println(pollTimeouts);
+
+    Serial.print("Deferred retries    : ");
+    Serial.println(retryPollsSent);
+
+    Serial.print("Retry successes     : ");
+    Serial.println(retrySuccesses);
+
     Serial.println("####################################################");
     Serial.println();
 }
@@ -1120,6 +1157,193 @@ void handleIncomingPacket(int packetSize)
 }
 
 // ============================================================
+// POLLING CONTROLLER
+// ============================================================
+// HOST-01 is the only device that decides who may use the channel.
+// A field node transmits only after receiving POLL,<its NODE_ID>.
+// ============================================================
+
+bool sendPoll(
+    const char* nodeId,
+    bool isRetry
+)
+{
+    String poll =
+        "POLL," + String(nodeId);
+
+    LoRa.idle();
+
+    LoRa.beginPacket();
+    LoRa.print(poll);
+
+    int result =
+        LoRa.endPacket();
+
+    // Be ready for the node's immediate response.
+    LoRa.receive();
+
+    if (result != 1)
+    {
+        pollSendFailures++;
+
+        Serial.print("[POLL TX FAILED] ");
+        Serial.println(poll);
+
+        return false;
+    }
+
+    pollPacketsSent++;
+
+    if (isRetry)
+    {
+        retryPollsSent++;
+    }
+
+    Serial.print(isRetry ? "[POLL RETRY TX] " : "[POLL TX] ");
+    Serial.println(poll);
+
+    return true;
+}
+
+
+bool pollNode(
+    NodeState &target,
+    bool isRetry
+)
+{
+    // Snapshot the target's packet counter. handleIncomingPacket()
+    // increments either receivedPackets or duplicatePackets for every
+    // valid response from this node.
+    uint32_t beforeCount =
+        target.receivedPackets +
+        target.duplicatePackets;
+
+    if (!sendPoll(target.nodeId, isRetry))
+    {
+        return false;
+    }
+
+    unsigned long waitStart =
+        millis();
+
+    while (
+        millis() - waitStart <
+        POLL_RESPONSE_TIMEOUT_MS
+    )
+    {
+        int packetSize =
+            LoRa.parsePacket();
+
+        if (packetSize > 0)
+        {
+            // This validates, ACKs, prints and updates NodeState.
+            // If an unexpected known node somehow talks, it is handled,
+            // but the hub continues waiting for the node it actually polled.
+            handleIncomingPacket(packetSize);
+
+            uint32_t afterCount =
+                target.receivedPackets +
+                target.duplicatePackets;
+
+            if (afterCount > beforeCount)
+            {
+                Serial.print("[POLL OK] ");
+                Serial.println(target.nodeId);
+
+                if (isRetry)
+                {
+                    retrySuccesses++;
+                }
+
+                return true;
+            }
+        }
+
+        delay(2);
+    }
+
+    pollTimeouts++;
+
+    Serial.print("[POLL TIMEOUT] ");
+    Serial.println(target.nodeId);
+
+    // Keep receiver armed for the next transaction.
+    LoRa.receive();
+
+    return false;
+}
+
+
+void runPollingRound()
+{
+    pollingRounds++;
+
+    Serial.println();
+    Serial.println("==================================================");
+    Serial.print("        POLLING ROUND #");
+    Serial.println(pollingRounds);
+    Serial.println("==================================================");
+
+    bool missed[NODE_COUNT] = {};
+    bool anyMissed = false;
+
+    // --------------------------------------------------------
+    // FIRST PASS: every node gets exactly one turn.
+    // --------------------------------------------------------
+
+    for (size_t i = 0; i < NODE_COUNT; i++)
+    {
+        bool success =
+            pollNode(
+                nodeStates[i],
+                false
+            );
+
+        missed[i] = !success;
+
+        if (!success)
+        {
+            anyMissed = true;
+        }
+
+        delay(INTER_POLL_GUARD_MS);
+    }
+
+    // --------------------------------------------------------
+    // DEFERRED RETRY: do not let one weak/dead node block the
+    // rest of the network. Complete the whole first pass, then
+    // retry only the nodes that were missed.
+    // --------------------------------------------------------
+
+    if (anyMissed)
+    {
+        Serial.println();
+        Serial.println("[POLL] Starting deferred retry pass...");
+
+        delay(RETRY_GUARD_MS);
+
+        for (size_t i = 0; i < NODE_COUNT; i++)
+        {
+            if (!missed[i])
+            {
+                continue;
+            }
+
+            pollNode(
+                nodeStates[i],
+                true
+            );
+
+            delay(INTER_POLL_GUARD_MS);
+        }
+    }
+
+    Serial.println("[POLL] Round complete.");
+    Serial.println();
+}
+
+
+// ============================================================
 // SETUP
 // ============================================================
 
@@ -1131,7 +1355,7 @@ void setup()
     Serial.println();
     Serial.println("==================================================");
     Serial.println("        TERRAVEIL HOST-01 / MAIN HUB");
-    Serial.println("      Multi-Node LoRa Receiver + Gateway");
+    Serial.println("   Collision-Free Polling LoRa Gateway");
     Serial.println("==================================================");
 
     Serial.println("Registered nodes:");
@@ -1190,7 +1414,7 @@ void setup()
     Serial.println("Sync Word   : 0x34");
     Serial.println("CRC         : Enabled");
     Serial.println();
-    Serial.println("HOST-01 READY - listening for UG-01, UG-02, LD-01");
+    Serial.println("HOST-01 READY - polling UG-01, UG-02, LD-01");
     Serial.println("==================================================");
     Serial.println();
 }
@@ -1201,7 +1425,39 @@ void setup()
 
 void loop()
 {
-    int packetSize = LoRa.parsePacket();
+    unsigned long now =
+        millis();
+
+    // Start immediately on boot, then approximately every 5 seconds.
+    if (
+        lastPollingRoundStart == 0
+        ||
+        now - lastPollingRoundStart >=
+        POLLING_ROUND_INTERVAL_MS
+    )
+    {
+        lastPollingRoundStart = now;
+
+        runPollingRound();
+
+        // If a badly degraded network made the round itself take longer
+        // than the configured interval, do not immediately hammer the
+        // nodes with another round. Restart the interval from here.
+        if (
+            millis() - lastPollingRoundStart >=
+            POLLING_ROUND_INTERVAL_MS
+        )
+        {
+            lastPollingRoundStart =
+                millis();
+        }
+    }
+
+    // Normally there should be no unsolicited DATA packets because all
+    // field nodes are polling-controlled. Keeping this listener makes the
+    // hub tolerant of a late packet during debugging or migration.
+    int packetSize =
+        LoRa.parsePacket();
 
     if (packetSize > 0)
     {

@@ -43,10 +43,12 @@ const char* NODE_ID = "UG-01";
 #define LORA_MOSI 23
 
 // -------------------------
-// Timing
+// Polling / ACK timing
 // -------------------------
-const unsigned long SEND_INTERVAL_MS = 5000;
+// HOST-01 owns the channel. This node transmits ONLY after receiving
+// POLL,UG-01. This removes same-channel packet collisions between nodes.
 const unsigned long ACK_TIMEOUT_MS = 1500;
+const unsigned long POLL_TURNAROUND_MS = 20;
 
 // -------------------------
 // MPU6050 calibration
@@ -60,7 +62,6 @@ float gyroZBias = 0.0;
 // -------------------------
 // State
 // -------------------------
-unsigned long lastSendTime = 0;
 unsigned long sequenceNumber = 0;
 
 // Complementary filter
@@ -439,15 +440,13 @@ bool sendTelemetry(
     unsigned long sequence
 )
 {
-    // -------------------------
-    // Transmit
-    // -------------------------
+    // Stop receive mode before transmitting.
+    LoRa.idle();
 
     Serial.print("[LoRa TX] ");
     Serial.println(packet);
 
     LoRa.beginPacket();
-
     LoRa.print(packet);
 
     int result = LoRa.endPacket();
@@ -455,16 +454,13 @@ bool sendTelemetry(
     if (result != 1)
     {
         Serial.println("[LoRa TX] FAILED");
+        LoRa.receive();
         return false;
     }
 
     Serial.println("[LoRa TX] Sent");
 
-
-    // -------------------------
-    // Wait for ACK
-    // -------------------------
-
+    // Return immediately to RX and wait for the hub ACK.
     LoRa.receive();
 
     unsigned long startTime = millis();
@@ -494,20 +490,16 @@ bool sendTelemetry(
             if (received == expectedACK)
             {
                 Serial.println("[ACK] Valid ACK received");
-
-                LoRa.idle();
-
+                LoRa.receive();
                 return true;
             }
         }
 
-        delay(5);
+        delay(2);
     }
 
-    LoRa.idle();
-
     Serial.println("[ACK] Timeout");
-
+    LoRa.receive();
     return false;
 }
 
@@ -639,7 +631,10 @@ void setup()
     lastIMUTime = millis();
 
     Serial.println();
-    Serial.println("UG-01 READY");
+    // Polling node stays in RX until HOST-01 addresses it.
+    LoRa.receive();
+
+    Serial.println("UG-01 READY - WAITING FOR HUB POLLS");
     Serial.println("==========================================");
     Serial.println();
 }
@@ -651,130 +646,132 @@ void setup()
 
 void loop()
 {
-    unsigned long now = millis();
+    // --------------------------------------------------------
+    // Continuously refresh the latest sensor state.
+    // Radio transmission is NOT timer-driven anymore.
+    // --------------------------------------------------------
 
-    // ----------------------------------------
-    // Read sensors continuously
-    // ----------------------------------------
+    static IMUData latestIMU = {};
+    static bool haveValidIMU = false;
 
-    IMUData imu;
+    IMUData currentIMU;
 
-    bool imuOK =
-        readIMU(imu);
+    if (readIMU(currentIMU))
+    {
+        latestIMU = currentIMU;
+        haveValidIMU = true;
+    }
 
-    bool vibration =
-        readVibration();
+    bool vibration = readVibration();
+    int soil = readSoil();
 
-    int soil =
-        readSoil();
-
-
-    // ----------------------------------------
-    // Local vibration warning
-    // ----------------------------------------
-
+    // Existing local warning behaviour.
     if (vibration)
     {
         Serial.println("[WARNING] Vibration detected!");
-
         warningBeep();
     }
 
+    // --------------------------------------------------------
+    // Listen for hub command.
+    // Every node hears the poll, but ONLY the addressed node
+    // responds. Example: POLL,UG-01
+    // --------------------------------------------------------
 
-    // ----------------------------------------
-    // Periodic transmission
-    // ----------------------------------------
+    int packetSize = LoRa.parsePacket();
 
-    if (
-        now - lastSendTime >=
-        SEND_INTERVAL_MS
-    )
+    if (packetSize > 0)
     {
-        lastSendTime = now;
+        String received = "";
 
-        sequenceNumber++;
-
-        if (!imuOK)
+        while (LoRa.available())
         {
-            Serial.println(
-                "[ERROR] MPU6050 read failed."
-            );
-
-            return;
+            received += (char)LoRa.read();
         }
 
+        received.trim();
 
-        // ------------------------------------
-        // Build packet
-        // ------------------------------------
+        String expectedPoll =
+            "POLL," + String(NODE_ID);
 
-        String packet =
-            buildPacket(
-                sequenceNumber,
-                imu,
-                vibration,
-                soil
-            );
-
-
-        // ------------------------------------
-        // Print sensor values
-        // ------------------------------------
-
-        Serial.println();
-        Serial.println("------------- SENSOR DATA -------------");
-
-        Serial.print("Node ID      : ");
-        Serial.println(NODE_ID);
-
-        Serial.print("Sequence     : ");
-        Serial.println(sequenceNumber);
-
-        Serial.print("Roll         : ");
-        Serial.print(imu.roll, 2);
-        Serial.println(" deg");
-
-        Serial.print("Pitch        : ");
-        Serial.print(imu.pitch, 2);
-        Serial.println(" deg");
-
-        Serial.print("Vibration    : ");
-        Serial.println(
-            vibration ? "DETECTED" : "NORMAL"
-        );
-
-        Serial.print("Soil ADC     : ");
-        Serial.println(soil);
-
-        Serial.println("---------------------------------------");
-
-
-        // ------------------------------------
-        // Send to HOST-01
-        // ------------------------------------
-
-        bool ack =
-            sendTelemetry(
-                packet,
-                sequenceNumber
-            );
-
-
-        if (ack)
+        if (received == expectedPoll)
         {
+            Serial.print("[POLL RX] ");
+            Serial.println(received);
+
+            if (!haveValidIMU)
+            {
+                Serial.println("[POLL] Cannot respond: no valid MPU6050 sample yet.");
+                LoRa.receive();
+                delay(2);
+                return;
+            }
+
+            sequenceNumber++;
+
+            String packet =
+                buildPacket(
+                    sequenceNumber,
+                    latestIMU,
+                    vibration,
+                    soil
+                );
+
+            // Keep the familiar sensor print block.
+            Serial.println();
+            Serial.println("------------- SENSOR DATA -------------");
+
+            Serial.print("Node ID      : ");
+            Serial.println(NODE_ID);
+
+            Serial.print("Sequence     : ");
+            Serial.println(sequenceNumber);
+
+            Serial.print("Roll         : ");
+            Serial.print(latestIMU.roll, 2);
+            Serial.println(" deg");
+
+            Serial.print("Pitch        : ");
+            Serial.print(latestIMU.pitch, 2);
+            Serial.println(" deg");
+
+            Serial.print("Vibration    : ");
             Serial.println(
-                "[STATUS] Telemetry delivered."
+                vibration ? "DETECTED" : "NORMAL"
             );
+
+            Serial.print("Soil ADC     : ");
+            Serial.println(soil);
+
+            Serial.println("---------------------------------------");
+
+            // Give HOST-01 a tiny deterministic turnaround window
+            // to switch from TX (poll) back to RX.
+            delay(POLL_TURNAROUND_MS);
+
+            bool ack =
+                sendTelemetry(
+                    packet,
+                    sequenceNumber
+                );
+
+            if (ack)
+            {
+                Serial.println("[STATUS] Telemetry delivered.");
+            }
+            else
+            {
+                Serial.println("[STATUS] Telemetry delivery failed.");
+            }
+
+            Serial.println();
         }
         else
         {
-            Serial.println(
-                "[STATUS] Telemetry delivery failed."
-            );
+            // Polls for UG-02 / LD-01 are intentionally ignored.
+            LoRa.receive();
         }
-
-        Serial.println();
     }
 
-    delay(10);
+    delay(5);
 }

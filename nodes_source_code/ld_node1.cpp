@@ -80,18 +80,18 @@ float gyroZBias = 0.0f;
 
 
 // ============================================================
-// TIMING
+// POLLING / ACK TIMING
 // ============================================================
 
-const unsigned long SEND_INTERVAL_MS = 5000;
-const unsigned long ACK_TIMEOUT_MS   = 1500;
+// HOST-01 owns the channel. LD-01 transmits ONLY after POLL,LD-01.
+const unsigned long ACK_TIMEOUT_MS      = 1500;
+const unsigned long POLL_TURNAROUND_MS  = 20;
 
 
 // ============================================================
 // STATE
 // ============================================================
 
-unsigned long lastSendTime = 0;
 unsigned long sequenceNumber = 0;
 
 unsigned long lastIMUTime = 0;
@@ -813,6 +813,8 @@ bool sendTelemetry(
     // TRANSMIT
     // ========================================================
 
+    LoRa.idle();
+
     Serial.print(
         "[LoRa TX] "
     );
@@ -821,17 +823,14 @@ bool sendTelemetry(
         packet
     );
 
-
     LoRa.beginPacket();
 
     LoRa.print(
         packet
     );
 
-
     int result =
         LoRa.endPacket();
-
 
     if (
         result != 1
@@ -841,14 +840,13 @@ bool sendTelemetry(
             "[LoRa TX] FAILED"
         );
 
+        LoRa.receive();
         return false;
     }
-
 
     Serial.println(
         "[LoRa TX] Sent"
     );
-
 
     // ========================================================
     // WAIT FOR ACK
@@ -856,10 +854,8 @@ bool sendTelemetry(
 
     LoRa.receive();
 
-
     unsigned long startTime =
         millis();
-
 
     while (
         millis()
@@ -872,12 +868,10 @@ bool sendTelemetry(
         int packetSize =
             LoRa.parsePacket();
 
-
         if (packetSize)
         {
             String received =
                 "";
-
 
             while (
                 LoRa.available()
@@ -888,9 +882,7 @@ bool sendTelemetry(
                     LoRa.read();
             }
 
-
             received.trim();
-
 
             Serial.print(
                 "[LoRa RX] "
@@ -900,11 +892,6 @@ bool sendTelemetry(
                 received
             );
 
-
-            // Expected:
-            //
-            // ACK,LD-01,27
-
             String expectedACK =
                 "ACK,"
                 +
@@ -913,7 +900,6 @@ bool sendTelemetry(
                 ","
                 +
                 String(sequence);
-
 
             if (
                 received
@@ -925,27 +911,19 @@ bool sendTelemetry(
                     "[ACK] Valid ACK received"
                 );
 
-
-                LoRa.idle();
-
-
+                LoRa.receive();
                 return true;
             }
         }
 
-
-        delay(5);
+        delay(2);
     }
-
-
-    LoRa.idle();
-
 
     Serial.println(
         "[ACK] Timeout"
     );
 
-
+    LoRa.receive();
     return false;
 }
 
@@ -1170,8 +1148,11 @@ void setup()
 
     Serial.println();
 
+    // Polling node stays in RX until HOST-01 addresses it.
+    LoRa.receive();
+
     Serial.println(
-        "LD-01 READY"
+        "LD-01 READY - WAITING FOR HUB POLLS"
     );
 
     Serial.println(
@@ -1188,307 +1169,336 @@ void setup()
 
 void loop()
 {
-    unsigned long now =
-        millis();
-
-
     // ========================================================
-    // READ POTENTIOMETER
+    // CONTINUOUSLY REFRESH LATEST SENSOR STATE
     // ========================================================
+
+    static IMUData latestIMU = {};
+    static bool haveValidIMU = false;
 
     int potADC =
         readPotentiometer();
-
 
     float displacement =
         adcToDisplacement(
             potADC
         );
 
-
-    // ========================================================
-    // READ MPU6050
-    // ========================================================
-
-    IMUData imu;
-
-
-    bool imuOK =
-        readIMU(
-            imu
-        );
-
-
-    // ========================================================
-    // PERIODIC TRANSMISSION
-    // ========================================================
+    IMUData currentIMU;
 
     if (
-        now
-        -
-        lastSendTime
-        >=
-        SEND_INTERVAL_MS
+        readIMU(
+            currentIMU
+        )
     )
     {
-        lastSendTime =
-            now;
+        latestIMU = currentIMU;
+        haveValidIMU = true;
+    }
 
+    // ========================================================
+    // WAIT FOR HOST POLL
+    // ========================================================
 
-        sequenceNumber++;
+    int packetSize =
+        LoRa.parsePacket();
 
+    if (packetSize > 0)
+    {
+        String received =
+            "";
 
-        if (!imuOK)
+        while (
+            LoRa.available()
+        )
         {
-            Serial.println(
-                "[ERROR] MPU6050 read failed."
-            );
-
-            return;
+            received +=
+                (char)
+                LoRa.read();
         }
 
+        received.trim();
 
-        // ====================================================
-        // BUILD PACKET
-        // ====================================================
+        String expectedPoll =
+            "POLL,"
+            +
+            String(NODE_ID);
 
-        String packet =
-            buildPacket(
-                sequenceNumber,
-                displacement,
-                potADC,
-                imu
+        if (
+            received
+            ==
+            expectedPoll
+        )
+        {
+            Serial.print(
+                "[POLL RX] "
+            );
+
+            Serial.println(
+                received
+            );
+
+            if (!haveValidIMU)
+            {
+                Serial.println(
+                    "[POLL] Cannot respond: no valid MPU6050 sample yet."
+                );
+
+                LoRa.receive();
+                delay(2);
+                return;
+            }
+
+            sequenceNumber++;
+
+            // ====================================================
+            // BUILD PACKET
+            // ====================================================
+
+            String packet =
+                buildPacket(
+                    sequenceNumber,
+                    displacement,
+                    potADC,
+                    latestIMU
+                );
+
+
+            // ====================================================
+            // PRINT SENSOR DATA
+            // ====================================================
+
+            Serial.println();
+
+            Serial.println(
+                "------------- SENSOR DATA -------------"
             );
 
 
-        // ====================================================
-        // PRINT SENSOR DATA
-        // ====================================================
+            Serial.print(
+                "Node ID      : "
+            );
 
-        Serial.println();
-
-        Serial.println(
-            "------------- SENSOR DATA -------------"
-        );
+            Serial.println(
+                NODE_ID
+            );
 
 
-        Serial.print(
-            "Node ID      : "
-        );
+            Serial.print(
+                "Sequence     : "
+            );
 
-        Serial.println(
-            NODE_ID
-        );
-
-
-        Serial.print(
-            "Sequence     : "
-        );
-
-        Serial.println(
-            sequenceNumber
-        );
-
-
-        // ----------------------------------------------------
-        // Linear displacement
-        // ----------------------------------------------------
-
-        Serial.print(
-            "Displacement : "
-        );
-
-        Serial.print(
-            displacement,
-            2
-        );
-
-        Serial.println(
-            " mm"
-        );
-
-
-        Serial.print(
-            "Pot ADC      : "
-        );
-
-        Serial.println(
-            potADC
-        );
-
-
-        // ----------------------------------------------------
-        // Orientation
-        // ----------------------------------------------------
-
-        Serial.print(
-            "Roll         : "
-        );
-
-        Serial.print(
-            imu.roll,
-            2
-        );
-
-        Serial.println(
-            " deg"
-        );
-
-
-        Serial.print(
-            "Pitch        : "
-        );
-
-        Serial.print(
-            imu.pitch,
-            2
-        );
-
-        Serial.println(
-            " deg"
-        );
-
-
-        Serial.print(
-            "Yaw          : "
-        );
-
-        Serial.print(
-            imu.yaw,
-            2
-        );
-
-        Serial.println(
-            " deg"
-        );
-
-
-        // ----------------------------------------------------
-        // Accelerometer
-        // ----------------------------------------------------
-
-        Serial.print(
-            "Accel X      : "
-        );
-
-        Serial.print(
-            imu.ax,
-            3
-        );
-
-        Serial.println(
-            " g"
-        );
-
-
-        Serial.print(
-            "Accel Y      : "
-        );
-
-        Serial.print(
-            imu.ay,
-            3
-        );
-
-        Serial.println(
-            " g"
-        );
-
-
-        Serial.print(
-            "Accel Z      : "
-        );
-
-        Serial.print(
-            imu.az,
-            3
-        );
-
-        Serial.println(
-            " g"
-        );
-
-
-        // ----------------------------------------------------
-        // Gyroscope
-        // ----------------------------------------------------
-
-        Serial.print(
-            "Gyro X       : "
-        );
-
-        Serial.print(
-            imu.gx,
-            3
-        );
-
-        Serial.println(
-            " deg/s"
-        );
-
-
-        Serial.print(
-            "Gyro Y       : "
-        );
-
-        Serial.print(
-            imu.gy,
-            3
-        );
-
-        Serial.println(
-            " deg/s"
-        );
-
-
-        Serial.print(
-            "Gyro Z       : "
-        );
-
-        Serial.print(
-            imu.gz,
-            3
-        );
-
-        Serial.println(
-            " deg/s"
-        );
-
-
-        Serial.println(
-            "---------------------------------------"
-        );
-
-
-        // ====================================================
-        // SEND TO HOST-01
-        // ====================================================
-
-        bool ack =
-            sendTelemetry(
-                packet,
+            Serial.println(
                 sequenceNumber
             );
 
 
-        if (ack)
-        {
-            Serial.println(
-                "[STATUS] Telemetry delivered."
-            );
-        }
+            // ----------------------------------------------------
+            // Linear displacement
+            // ----------------------------------------------------
 
+            Serial.print(
+                "Displacement : "
+            );
+
+            Serial.print(
+                displacement,
+                2
+            );
+
+            Serial.println(
+                " mm"
+            );
+
+
+            Serial.print(
+                "Pot ADC      : "
+            );
+
+            Serial.println(
+                potADC
+            );
+
+
+            // ----------------------------------------------------
+            // Orientation
+            // ----------------------------------------------------
+
+            Serial.print(
+                "Roll         : "
+            );
+
+            Serial.print(
+                latestIMU.roll,
+                2
+            );
+
+            Serial.println(
+                " deg"
+            );
+
+
+            Serial.print(
+                "Pitch        : "
+            );
+
+            Serial.print(
+                latestIMU.pitch,
+                2
+            );
+
+            Serial.println(
+                " deg"
+            );
+
+
+            Serial.print(
+                "Yaw          : "
+            );
+
+            Serial.print(
+                latestIMU.yaw,
+                2
+            );
+
+            Serial.println(
+                " deg"
+            );
+
+
+            // ----------------------------------------------------
+            // Accelerometer
+            // ----------------------------------------------------
+
+            Serial.print(
+                "Accel X      : "
+            );
+
+            Serial.print(
+                latestIMU.ax,
+                3
+            );
+
+            Serial.println(
+                " g"
+            );
+
+
+            Serial.print(
+                "Accel Y      : "
+            );
+
+            Serial.print(
+                latestIMU.ay,
+                3
+            );
+
+            Serial.println(
+                " g"
+            );
+
+
+            Serial.print(
+                "Accel Z      : "
+            );
+
+            Serial.print(
+                latestIMU.az,
+                3
+            );
+
+            Serial.println(
+                " g"
+            );
+
+
+            // ----------------------------------------------------
+            // Gyroscope
+            // ----------------------------------------------------
+
+            Serial.print(
+                "Gyro X       : "
+            );
+
+            Serial.print(
+                latestIMU.gx,
+                3
+            );
+
+            Serial.println(
+                " deg/s"
+            );
+
+
+            Serial.print(
+                "Gyro Y       : "
+            );
+
+            Serial.print(
+                latestIMU.gy,
+                3
+            );
+
+            Serial.println(
+                " deg/s"
+            );
+
+
+            Serial.print(
+                "Gyro Z       : "
+            );
+
+            Serial.print(
+                latestIMU.gz,
+                3
+            );
+
+            Serial.println(
+                " deg/s"
+            );
+
+
+            Serial.println(
+                "---------------------------------------"
+            );
+
+
+            // ====================================================
+            // SEND TO HOST-01 ONLY AFTER BEING POLLED
+            // ====================================================
+
+            delay(POLL_TURNAROUND_MS);
+
+            bool ack =
+                sendTelemetry(
+                    packet,
+                    sequenceNumber
+                );
+
+
+            if (ack)
+            {
+                Serial.println(
+                    "[STATUS] Telemetry delivered."
+                );
+            }
+
+            else
+            {
+                Serial.println(
+                    "[STATUS] Telemetry delivery failed."
+                );
+            }
+
+
+            Serial.println();
+        }
         else
         {
-            Serial.println(
-                "[STATUS] Telemetry delivery failed."
-            );
+            // Polls for UG-01 / UG-02 are intentionally ignored.
+            LoRa.receive();
         }
-
-
-        Serial.println();
     }
 
-
-    delay(10);
+    delay(5);
 }

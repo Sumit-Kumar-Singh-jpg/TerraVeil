@@ -1275,6 +1275,7 @@ function updateDiagnosticsData(nodeCount, readingsCount) {
 // RED ALERT & MINE SIRENS SUBSYSTEM
 // ==========================================================================
 let isRedAlertActive = false;
+let autoAnomalyLatched = false;
 let alertDurationTimer = null;
 let alertStartTimestamp = null;
 let sirenAudioCtx = null;
@@ -1514,6 +1515,26 @@ async function pollDataPipeline() {
             ` · Received: ${system.usb?.received ?? 0} · Live updates: ${system.usb?.applied ?? 0} · Duplicates: ${system.usb?.duplicates ?? 0} · Historical: ${system.usb?.historical ?? 0} · Latest received sequence: ${system.usb?.last_sequence ?? 'UNAVAILABLE'} · ${system.usb?.last_result || system.usb?.last_error || 'Waiting for telemetry'}`;
         nodesList = registered;
         latestReadings = Object.fromEntries(readingsData.map(r => [r.node_id,r]));
+        const liveAnomalyDetected = readingsData.some(
+            reading =>
+                reading?.online === true &&
+                Number(reading?.anomaly) === 1
+        );
+
+        if (liveAnomalyDetected && !autoAnomalyLatched) {
+
+            autoAnomalyLatched = true;
+
+            if (!isRedAlertActive) {
+                document
+                    .getElementById("btn-trigger-alert")
+                    ?.click();
+            }
+        }
+
+        if (!liveAnomalyDetected) {
+            autoAnomalyLatched = false;
+        }
         updateHardwareConnectivity(system);
         window.backendZones = twin.zones;
         selectedNodeId ||= nodesList[0]?.node_id;

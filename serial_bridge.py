@@ -1,13 +1,17 @@
 """USB source adapter for TerraVeil HOST-01.
 
-Supports:
-- Current polling HOST-01 `HUB_DATA,...` lines for UG-01, UG-02 and LD-01.
-- Existing buffered `TELEMETRY {...}` JSON frames.
-- Existing legacy human-readable `RAW: DATA,...` UG frames.
+Drop-in replacement focused on reliable REAL HARDWARE operation on both Windows
+and WSL/Linux.
 
-No serial connection is opened by importing this module. start() is called by the
-Mother Host entry point. HTTP and USB use the same ingestion callback.
+Key behaviours:
+- Auto-detects Silicon Labs CP210x (VID:PID 10c4:ea60).
+- Falls back to /dev/ttyUSB* or /dev/ttyACM* in WSL/Linux.
+- Supports current HUB_DATA lines, buffered TELEMETRY JSON, and legacy RAW blocks.
+- Marks the transport type so telemetry.py can safely distinguish a fresh live
+  sequence reset from replayed buffered data.
 """
+
+import glob
 import json
 import logging
 import math
@@ -24,12 +28,68 @@ log = logging.getLogger(__name__)
 HOST_ID = "HOST-01"
 DEFAULT_ZONE_ID = "ZONE-A"
 
-# One HOST-01 receives all three practical demo nodes.
 SUPPORTED_NODES = {
     "UG-01": "UG",
     "UG-02": "UG",
     "LD-01": "LD",
 }
+
+CP210X_VID = 0x10C4
+CP210X_PID = 0xEA60
+
+
+def detect_serial_port(configured=None):
+    """Resolve HOST-01 serial port across Windows and WSL/Linux.
+
+    An explicitly configured TERRAVEIL_SERIAL_PORT always wins. Use "auto" (or
+    omit the variable) to discover the CP210x automatically.
+    """
+    configured = (configured or "auto").strip()
+    if configured and configured.lower() != "auto":
+        return configured
+
+    try:
+        from serial.tools import list_ports
+
+        ports = list(list_ports.comports())
+
+        # Strongest match: exact CP210x VID:PID used by HOST-01.
+        for port in ports:
+            if port.vid == CP210X_VID and port.pid == CP210X_PID:
+                return port.device
+
+        # Descriptive fallback for drivers/platforms that omit VID/PID metadata.
+        for port in ports:
+            text = " ".join(
+                str(value or "")
+                for value in (
+                    port.device,
+                    port.description,
+                    port.manufacturer,
+                    port.product,
+                    port.hwid,
+                )
+            ).lower()
+            if "cp210" in text or "silicon labs" in text:
+                return port.device
+
+        # On Linux/WSL prefer USB UART/ACM ports over unrelated serial devices.
+        for port in ports:
+            device = str(port.device or "")
+            if device.startswith("/dev/ttyUSB") or device.startswith("/dev/ttyACM"):
+                return device
+
+    except Exception as error:
+        log.debug("Serial port discovery via pyserial failed: %s", error)
+
+    # WSL/Linux fallback even if pyserial cannot enumerate metadata yet.
+    candidates = sorted(glob.glob("/dev/ttyUSB*")) + sorted(glob.glob("/dev/ttyACM*"))
+    if candidates:
+        return candidates[0]
+
+    # No device is currently attached. Return None so the read loop keeps
+    # retrying discovery instead of hard-wiring the wrong platform path.
+    return None
 
 
 class ReceiverParser:
@@ -45,17 +105,6 @@ class ReceiverParser:
         return number
 
     def _parse_hub_data(self, line):
-        """Parse HOST-01's normalized machine-readable USB line.
-
-        UG example:
-          HUB_DATA,NODE=UG-01,TYPE=UG,SEQ=27,ROLL=-1.24,PITCH=0.72,
-          YAW=3.81,AX=0.021,AY=-0.018,AZ=0.998,GX=0.140,GY=-0.220,
-          GZ=0.075,VIBRATION=0,SOIL_ADC=2214,RSSI=-62,SNR=9.25
-
-        LD example:
-          HUB_DATA,NODE=LD-01,TYPE=LD,SEQ=18,DISP_MM=42.75,POT_ADC=2184,
-          ROLL=-1.25,PITCH=0.82,YAW=4.10,...,RSSI=-67,SNR=8.50
-        """
         parts = [part.strip() for part in line.split(",")]
         if not parts or parts[0] != "HUB_DATA":
             return None
@@ -87,6 +136,7 @@ class ReceiverParser:
                 "sequence": sequence,
                 "rssi": self._finite_float(fields["RSSI"]),
                 "snr": self._finite_float(fields["SNR"]),
+                "_transport": "HUB_DATA",
             }
 
             if node_type == "UG":
@@ -104,8 +154,6 @@ class ReceiverParser:
                     displacement_mm=self._finite_float(fields["DISP_MM"]),
                     potentiometer_raw=self._finite_float(fields["POT_ADC"]),
                 )
-                # Preserve orientation if HOST-01 supplies it. telemetry.py stores
-                # roll/pitch for diagnostics but displacement remains the LD risk input.
                 if "ROLL" in fields:
                     payload["roll"] = self._finite_float(fields["ROLL"])
                 if "PITCH" in fields:
@@ -122,24 +170,22 @@ class ReceiverParser:
         if self.pending and now - self.started > 5:
             self.pending = None
 
-        # Current polling HOST-01 path.
         if line.startswith("HUB_DATA,"):
             self.pending = None
             return self._parse_hub_data(line)
 
-        # Existing optional buffered HOST-01 firmware path.
         if line.startswith("TELEMETRY "):
             self.pending = None
             try:
                 payload = json.loads(line[10:])
                 if not isinstance(payload, dict):
                     return None
+                payload = dict(payload)
+                payload["_transport"] = "BUFFERED"
                 return payload, True
             except (ValueError, TypeError):
                 return None
 
-        # Existing legacy human-readable receiver path. Extended to UG-02 while
-        # preserving the original 7-field packet format.
         if line.startswith("RAW:"):
             self.pending = None
             parts = line[4:].strip().split(",")
@@ -161,6 +207,7 @@ class ReceiverParser:
                     pitch=values[1],
                     vibration=values[2],
                     soil=values[3],
+                    _transport="LEGACY",
                 )
                 self.started = now
             except ValueError:
@@ -181,16 +228,12 @@ class ReceiverParser:
             elif line == "[OK] Packet processed.":
                 packet, self.pending = self.pending, None
                 if all(k in packet for k in ("host_id", "zone_id", "rssi", "snr")):
-                    packet["queue_age_ms"] = max(
-                        0, int((now - self.started) * 1000)
-                    )
+                    packet["queue_age_ms"] = max(0, int((now - self.started) * 1000))
                     return packet, False
         return None
 
 
 class LineDecoder:
-    """Bound memory and discard oversized lines through the next newline."""
-
     def __init__(self):
         self.buffer = bytearray()
         self.discard = False
@@ -213,9 +256,10 @@ class LineDecoder:
 
 
 class SerialBridge:
-    def __init__(self, ingest, port="COM7", baudrate=115200):
+    def __init__(self, ingest, port="auto", baudrate=115200):
         self.ingest = ingest
-        self.port_name = port
+        self.configured_port = port or "auto"
+        self.port_name = None
         self.baudrate = baudrate
         self.stop_event = threading.Event()
         self.pending = queue.Queue(maxsize=256)
@@ -241,7 +285,8 @@ class SerialBridge:
     def snapshot(self):
         return dict(
             transport="USB SERIAL",
-            port=self.port_name,
+            configured_port=self.configured_port,
+            port=self.port_name or self.configured_port,
             status=self.status,
             last_error=self.last_error,
             received=self.received,
@@ -308,11 +353,12 @@ class SerialBridge:
             with self.inflight_lock:
                 self.inflight.discard(key)
             self.dropped += 1
-            log.error(
-                "USB pending queue full; packet %s dropped (total %s)",
-                key,
-                self.dropped,
-            )
+            log.error("USB pending queue full; packet %s dropped (total %s)", key, self.dropped)
+
+    def _resolve_port(self):
+        port = detect_serial_port(self.configured_port)
+        self.port_name = port
+        return port
 
     def read_loop(self):
         import serial
@@ -320,6 +366,13 @@ class SerialBridge:
         while not self.stop_event.is_set():
             port = None
             try:
+                resolved = self._resolve_port()
+                if not resolved:
+                    self.status = "DISCONNECTED"
+                    self.last_error = "HOST-01 CP210x not visible to this OS/WSL instance"
+                    self.stop_event.wait(2)
+                    continue
+
                 port = serial.Serial(
                     port=None,
                     baudrate=self.baudrate,
@@ -328,7 +381,7 @@ class SerialBridge:
                 )
                 port.dtr = False
                 port.rts = False
-                port.port = self.port_name
+                port.port = resolved
                 port.open()
                 port.reset_input_buffer()
 
@@ -336,11 +389,7 @@ class SerialBridge:
                     self.port = port
 
                 self.status, self.last_error = "OPEN", None
-                log.info(
-                    "USB receiver connected on %s at %s baud",
-                    self.port_name,
-                    self.baudrate,
-                )
+                log.info("USB receiver connected on %s at %s baud", resolved, self.baudrate)
                 parser, decoder = ReceiverParser(), LineDecoder()
 
                 while not self.stop_event.is_set():
@@ -353,11 +402,7 @@ class SerialBridge:
             except (serial.SerialException, OSError) as error:
                 message = str(error)
                 if message != self.last_error:
-                    log.warning(
-                        "USB receiver unavailable on %s: %s",
-                        self.port_name,
-                        message,
-                    )
+                    log.warning("USB receiver unavailable on %s: %s", self.port_name, message)
                 self.status, self.last_error = (
                     "BUSY" if "Access is denied" in message else "DISCONNECTED",
                     message,
@@ -386,26 +431,25 @@ class SerialBridge:
         if not result.get("success"):
             raise RuntimeError("Ingestion did not confirm storage")
 
-        # Only buffered TELEMETRY frames require the PC-level STORED response.
-        # HUB_DATA has already completed its LoRa ACK transaction independently.
         if acknowledgement:
             with self.connection_lock:
                 if self.port and self.port.is_open:
                     try:
-                        self.port.write(
-                            f"STORED,{key[0]},{key[1]}\n".encode("ascii")
-                        )
+                        self.port.write(f"STORED,{key[0]},{key[1]}\n".encode("ascii"))
                     except (OSError, TimeoutError):
                         pass
 
-        if result.get("duplicate"):
+        if result.get("new_session"):
+            self.applied += 1
+            self.last_result = "LIVE UPDATE: node reboot detected; sequence session renewed"
+        elif result.get("duplicate"):
             self.duplicates += 1
             self.last_result = "DUPLICATE: already stored in this node session"
         elif result.get("applied") is False:
             self.historical += 1
             self.last_result = (
                 "OLDER SEQUENCE: saved to history, not live state. "
-                "If the node restarted, begin a new node session."
+                "Buffered/replayed packets do not refresh node freshness."
             )
         else:
             self.applied += 1
@@ -450,7 +494,7 @@ def start(ingest):
     if _bridge is None and os.environ.get("TERRAVEIL_SERIAL_ENABLED", "1") == "1":
         _bridge = SerialBridge(
             ingest,
-            os.environ.get("TERRAVEIL_SERIAL_PORT", "COM7"),
+            os.environ.get("TERRAVEIL_SERIAL_PORT", "auto"),
             int(os.environ.get("TERRAVEIL_SERIAL_BAUD", "115200")),
         ).start()
     return _bridge
@@ -462,7 +506,8 @@ def health():
         if _bridge
         else dict(
             transport="USB SERIAL",
-            port=os.environ.get("TERRAVEIL_SERIAL_PORT", "COM7"),
+            configured_port=os.environ.get("TERRAVEIL_SERIAL_PORT", "auto"),
+            port=os.environ.get("TERRAVEIL_SERIAL_PORT", "auto"),
             status="NOT STARTED",
         )
     )

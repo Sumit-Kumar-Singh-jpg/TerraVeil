@@ -1,13 +1,14 @@
-"""Validated source adapters and one offline evidence/risk ingestion path.
+"""Validated TerraVeil telemetry ingestion and freshness state.
 
-REAL hardware supports:
-- UG-01 / UG-02: roll, pitch, binary vibration, raw soil ADC, RSSI/SNR.
-- LD-01: calibrated displacement, raw potentiometer ADC, RSSI/SNR.
+Drop-in replacement fixes REAL HARDWARE nodes getting stuck OFFLINE after a
+physical reboot while preserving stale/buffered packet protection.
 """
+
 import math
 import os
-from statistics import median
 from datetime import datetime, timezone, timedelta
+from statistics import median
+from uuid import uuid4
 
 from database import get_connection, get_nodes, get_latest_readings, mode
 from ml_model import calculate_risk
@@ -15,18 +16,23 @@ from digital_twin import distance
 
 
 def timeout_seconds():
-    return max(1, float(os.environ.get("NODE_TIMEOUT_SECONDS", "15")))
+    # 30 s is intentionally tolerant of a three-node polling round and a few
+    # missed LoRa turns while still detecting genuinely stale telemetry quickly.
+    return max(1, float(os.environ.get("NODE_TIMEOUT_SECONDS", "30")))
 
 
 def utcnow():
     return datetime.now(timezone.utc)
 
 
+def _as_aware(stamp):
+    value = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def decorate(row):
     stamp = row.get("last_seen") or row["timestamp"]
-    seen = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    if seen.tzinfo is None:
-        seen = seen.replace(tzinfo=timezone.utc)
+    seen = _as_aware(stamp)
     row["last_seen"] = stamp
     row["online"] = (utcnow() - seen).total_seconds() <= timeout_seconds()
     row["status"] = (
@@ -88,12 +94,61 @@ def _real_displacement_fields(payload, row):
     row["displacement_mm"] = number(payload, "displacement_mm", 0, 10000)
     row["potentiometer_raw"] = number(payload, "potentiometer_raw", 0, 4095)
 
-    # Optional LD MPU orientation is useful for diagnostics and is stored if sent,
-    # but COPOD/risk for the displacement node remains based on displacement_mm.
     if "roll" in payload:
         row["roll"] = number(payload, "roll", -180, 180)
     if "pitch" in payload:
         row["pitch"] = number(payload, "pitch", -180, 180)
+
+
+def _previous_is_stale(previous, now):
+    if not previous:
+        return True
+    stamp = previous.get("last_seen") or previous.get("timestamp")
+    if not stamp:
+        return True
+    try:
+        return (now - _as_aware(stamp)).total_seconds() > timeout_seconds()
+    except (TypeError, ValueError):
+        return True
+
+
+def _is_fresh_live_counter_reset(payload, previous, now):
+    """Return True only for a likely physical node reboot.
+
+    We automatically rotate the backend session only for non-buffered live serial
+    formats. Buffered TELEMETRY replay never triggers this, so stale gateway data
+    still cannot make a dead node appear live.
+    """
+    if not previous:
+        return False
+
+    new_sequence = payload.get("sequence")
+    old_sequence = previous.get("sequence")
+    if type(new_sequence) is not int or type(old_sequence) is not int:
+        return False
+    if new_sequence >= old_sequence:
+        return False
+
+    # Nodes start again near zero after an ESP32 reboot. Do not infer a reboot
+    # from arbitrary out-of-order numbers.
+    if new_sequence > 3:
+        return False
+
+    # Only immediate/live transports are eligible. Buffered gateway replays must
+    # continue to use the explicit manual-session path if needed.
+    if payload.get("_transport") not in ("HUB_DATA", "LEGACY"):
+        return False
+
+    queue_age_ms = payload.get("queue_age_ms", 0)
+    if type(queue_age_ms) is not int or queue_age_ms < 0:
+        return False
+    if queue_age_ms > 5000:
+        return False
+
+    # Strong evidence of a reboot: either the former reading has already gone
+    # stale, or the old counter had clearly progressed before suddenly returning
+    # to the startup range.
+    return _previous_is_stale(previous, now) or old_sequence >= 10
 
 
 def ingest(payload, source="REAL"):
@@ -124,11 +179,8 @@ def ingest(payload, source="REAL"):
         else:
             _real_displacement_fields(payload, row)
 
-        value = payload.get("queue_age_ms", 0)
         if "queue_age_ms" in payload:
-            row["queue_age_ms"] = number(
-                payload, "queue_age_ms", 0, 31536000000, True
-            )
+            row["queue_age_ms"] = number(payload, "queue_age_ms", 0, 31536000000, True)
         else:
             row["queue_age_ms"] = 0
 
@@ -163,16 +215,34 @@ def ingest(payload, source="REAL"):
         ).fetchone()[0] != "SIMULATION":
             return dict(success=True, skipped=True)
 
-        row["session_id"] = (
-            conn.execute(
-                "SELECT session_id FROM hardware_nodes WHERE node_id=?",
-                (node_id,),
-            ).fetchone()[0]
-            if source == "REAL"
-            else "legacy"
-        )
+        new_session = False
 
         if source == "REAL":
+            session_row = conn.execute(
+                "SELECT session_id FROM hardware_nodes WHERE node_id=?",
+                (node_id,),
+            ).fetchone()
+            row["session_id"] = session_row[0]
+
+            previous_row = conn.execute(
+                "SELECT * FROM readings WHERE node_id=? AND data_source='REAL' "
+                "AND session_id=? AND processed=1 ORDER BY id DESC LIMIT 1",
+                (node_id, row["session_id"]),
+            ).fetchone()
+            previous_latest = dict(previous_row) if previous_row else None
+
+            # IMPORTANT: detect a genuine fresh counter reset BEFORE duplicate
+            # lookup. Otherwise rebooted sequence 1/2/3 is mistaken for an old
+            # duplicate and last_seen can never recover.
+            if _is_fresh_live_counter_reset(payload, previous_latest, now):
+                row["session_id"] = uuid4().hex
+                conn.execute(
+                    "UPDATE hardware_nodes SET session_id=? WHERE node_id=?",
+                    (row["session_id"], node_id),
+                )
+                previous_latest = None
+                new_session = True
+
             duplicate = conn.execute(
                 "SELECT id FROM readings WHERE data_source='REAL' "
                 "AND node_id=? AND session_id=? AND sequence=?",
@@ -180,6 +250,9 @@ def ingest(payload, source="REAL"):
             ).fetchone()
             if duplicate:
                 return dict(success=True, duplicate=True, id=duplicate["id"])
+
+        else:
+            row["session_id"] = "legacy"
 
         previous = [
             dict(r)
@@ -203,29 +276,61 @@ def ingest(payload, source="REAL"):
                     and abs(
                         (
                             datetime.fromisoformat(row["timestamp"])
-                            - datetime.fromisoformat(r["timestamp"]).replace(
-                                tzinfo=timezone.utc
-                            )
+                            - datetime.fromisoformat(r["timestamp"]).replace(tzinfo=timezone.utc)
                         ).total_seconds()
                     )
                     <= timeout_seconds()
                 ]
                 filtered[field] = median([row[field], *prior])
 
-        candidate, ml_level = calculate_risk(
-            node["node_type"],
-            filtered
-        )
+        # ------------------------------------------------------------
+        # LD-01 displacement reference
+        # ------------------------------------------------------------
+        # A linear potentiometer reports an absolute shaft position. For
+        # subsidence monitoring we care about MOVEMENT away from the position
+        # observed at the beginning of the current node session. This also
+        # means LD-01 can power on at any point along its mechanical travel
+        # without being declared anomalous just because the absolute mm value
+        # is large.
+        ld_change_mm = 0.0
+        ld_baseline_mm = None
 
-        # Preserve the raw COPOD result separately from the
-        # network-validated TerraVeil risk state.
+        if node["node_type"] != "UnderGround":
+            baseline_row = conn.execute(
+                "SELECT displacement_mm FROM readings "
+                "WHERE node_id=? AND data_source=? AND session_id=? "
+                "AND processed=1 AND displacement_mm IS NOT NULL "
+                "ORDER BY id ASC LIMIT 1",
+                (node_id, source, row["session_id"]),
+            ).fetchone()
+
+            ld_baseline_mm = (
+                float(baseline_row["displacement_mm"])
+                if baseline_row is not None
+                else float(row["displacement_mm"])
+            )
+            ld_change_mm = abs(float(row["displacement_mm"]) - ld_baseline_mm)
+
+            # COPOD for LD-01 sees displacement CHANGE, not absolute position.
+            filtered["displacement_delta_mm"] = ld_change_mm
+
+        candidate, _ml_level = calculate_risk(node["node_type"], filtered)
+
         row["ml_score"] = round(candidate, 2)
         amplitude = math.hypot(row.get("tilt_x", 0), row.get("tilt_y", 0))
-        abnormal = (
-            amplitude >= 0.8
-            or row.get("vibration", 0) >= 0.8
-            or row.get("displacement_mm", 0) >= 4
-        )
+
+        if node["node_type"] == "UnderGround":
+            # UG-01 / UG-02 behaviour remains unchanged.
+            abnormal = (
+                amplitude >= 0.8
+                or row.get("vibration", 0) >= 0.8
+            )
+        else:
+            # LD-01: >= 1 mm movement from the current-session reference is
+            # physically meaningful enough for the prototype anomaly demo.
+            # COPOD must ALSO judge the movement as unusual.
+            abnormal = ld_change_mm >= 1.0
+
         row["anomaly"] = int(abnormal and candidate >= 40)
 
         recent = [
@@ -234,9 +339,7 @@ def ingest(payload, source="REAL"):
             if abs(
                 (
                     datetime.fromisoformat(row["timestamp"])
-                    - datetime.fromisoformat(r["timestamp"]).replace(
-                        tzinfo=timezone.utc
-                    )
+                    - datetime.fromisoformat(r["timestamp"]).replace(tzinfo=timezone.utc)
                 ).total_seconds()
             )
             <= timeout_seconds()
@@ -299,13 +402,20 @@ def ingest(payload, source="REAL"):
             min(candidate, {"LOW": 39, "MEDIUM": 69, "HIGH": 89, "CRITICAL": 100}[level]),
             2,
         )
-        row["evidence"] = (
-            "SUBSIDENCE RISK: persistent correlated evidence"
-            if peers
-            else "ANOMALY DETECTED: unconfirmed; inspect and track persistence"
-            if row["anomaly"]
-            else "No anomaly detected in available sensors"
-        )
+        if peers:
+            row["evidence"] = "SUBSIDENCE RISK: persistent correlated evidence"
+        elif row["anomaly"] and node["node_type"] != "UnderGround":
+            row["evidence"] = (
+                f"ANOMALY DETECTED: LD-01 displacement changed "
+                f"{ld_change_mm:.2f} mm from session baseline "
+                f"({ld_baseline_mm:.2f} mm); inspect and track persistence"
+            )
+        elif row["anomaly"]:
+            row["evidence"] = (
+                "ANOMALY DETECTED: unconfirmed; inspect and track persistence"
+            )
+        else:
+            row["evidence"] = "No anomaly detected in available sensors"
 
         if not row["processed"]:
             row.update(
@@ -325,6 +435,7 @@ def ingest(payload, source="REAL"):
             success=True,
             duplicate=False,
             applied=bool(row["processed"]),
+            new_session=new_session,
             id=cursor.lastrowid,
             server_timestamp=row["server_timestamp"],
             risk_level=row["risk_level"],
@@ -337,18 +448,26 @@ def network_state(source=None):
     source = source or mode()
     readings = get_latest_readings(source)
     live = any(r["online"] for r in readings)
+    usb = health()
+    usb_open = usb.get("status") == "OPEN"
+
     with get_connection() as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM readings WHERE data_source=?", (source,)
         ).fetchone()[0]
+
     return dict(
         mode=source,
-        usb=health(),
+        usb=usb,
+        # LoRa/network freshness is based on actual fresh node packets.
         lora_network=("ONLINE" if live else "OFFLINE") if source == "REAL" else "SIMULATION",
-        host_01=("ONLINE" if live else "UNCONFIRMED") if source == "REAL" else "SIMULATION",
+        # HOST-01 itself is a USB-connected device, so report its own transport
+        # state independently from whether a field node has spoken recently.
+        host_01=("ONLINE" if usb_open else "OFFLINE") if source == "REAL" else "SIMULATION",
         mother_host="ONLINE",
         database="LOCAL",
         ml_engine="ACTIVE",
         readings_count=count,
         timeout_seconds=timeout_seconds(),
+        online_nodes=sum(1 for r in readings if r["online"]),
     )

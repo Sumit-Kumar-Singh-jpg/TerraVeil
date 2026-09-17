@@ -4,13 +4,12 @@ from pyod.models.copod import COPOD
 # ============================================================
 # TERRAVEIL COPOD ANOMALY MODEL
 # ============================================================
-#
-# Public API intentionally preserved for telemetry.py:
+# Public API preserved:
 #     calculate_risk(node_type, values)
 #
-# COPOD is used through decision_function() only. We do not use
-# model.predict() / threshold_ for anomaly scoring, so the PyOD
-# contamination threshold does not control the anomaly score.
+# UG nodes are scored from tilt/vibration/soil (or legacy BME inputs).
+# LD nodes are scored from displacement CHANGE relative to the node's
+# current-session baseline. telemetry.py supplies displacement_delta_mm.
 # ============================================================
 
 RNG_SEED = 42
@@ -40,7 +39,7 @@ def _score_percentile(model, reference_scores, sample):
 
 
 def _level_from_score(score):
-    # Compatibility only. telemetry.py uses the numeric candidate score.
+    # Compatibility only. telemetry.py applies the physical anomaly gate.
     if score >= 90:
         return "HIGH"
     if score >= 70:
@@ -50,12 +49,6 @@ def _level_from_score(score):
 
 # ============================================================
 # UNDERGROUND NODE BASELINES
-# ============================================================
-# Current hardware baseline:
-#   tilt_x, tilt_y, vibration, soil
-#
-# Legacy/simulation BME baseline:
-#   tilt_x, tilt_y, vibration, temperature, humidity
 # ============================================================
 
 normal_ground_data = []
@@ -90,17 +83,19 @@ ground_bme_model, ground_bme_reference_scores = _fit_copod(normal_ground_bme_dat
 # ============================================================
 # LINEAR DISPLACEMENT NODE BASELINE
 # ============================================================
-# Use calibrated physical displacement, not raw potentiometer ADC,
-# because raw ADC depends on mounting and calibration.
+# LD-01 must detect MOVEMENT, not the shaft's arbitrary absolute position.
+# Normal movement between the session reference and a healthy reading is
+# expected to be close to zero. The physical gate in telemetry.py requires
+# >= 1.0 mm change before an LD reading becomes an anomaly.
 # ============================================================
 
-normal_displacement_data = []
+normal_displacement_change_data = []
 for _ in range(BASELINE_SAMPLES):
-    displacement = abs(rng.normal(0.5, 0.15))
-    normal_displacement_data.append([displacement])
+    displacement_change = abs(rng.normal(0.0, 0.12))
+    normal_displacement_change_data.append([displacement_change])
 
 displacement_model, displacement_reference_scores = _fit_copod(
-    normal_displacement_data
+    normal_displacement_change_data
 )
 
 
@@ -146,12 +141,12 @@ def evaluate_ground(
     )
 
 
-def evaluate_crack(displacement):
-    """Return (anomaly_percentile, raw_copod_score)."""
+def evaluate_crack(displacement_change_mm):
+    """Score LD/crack movement relative to its current-session reference."""
     return _score_percentile(
         displacement_model,
         displacement_reference_scores,
-        [displacement],
+        [displacement_change_mm],
     )
 
 
@@ -160,17 +155,7 @@ def evaluate_crack(displacement):
 # ============================================================
 
 def calculate_risk(node_type, values):
-    """
-    Return:
-        (risk_score_0_to_100, risk_level)
-
-    The numeric score is the empirical percentile of the COPOD
-    outlier score against the fitted normal baseline.
-
-    telemetry.py remains responsible for combining this candidate
-    score with physical checks, temporal persistence and nearby-node
-    correlation before escalating the live network risk state.
-    """
+    """Return (COPOD percentile 0-100, compatibility risk level)."""
 
     if node_type == "UnderGround":
         score, _ = evaluate_ground(
@@ -194,7 +179,12 @@ def calculate_risk(node_type, values):
             ),
         )
     else:
-        score, _ = evaluate_crack(float(values["displacement_mm"]))
+        # New telemetry.py supplies displacement_delta_mm. Keep a fallback to
+        # displacement_mm so older simulation/tests/callers do not break.
+        movement = values.get("displacement_delta_mm")
+        if movement is None:
+            movement = values.get("displacement_mm", 0.0)
+        score, _ = evaluate_crack(abs(float(movement)))
 
     score = max(0.0, min(100.0, float(score)))
     level = _level_from_score(score)

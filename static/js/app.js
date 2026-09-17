@@ -234,19 +234,17 @@ function updateHardwareConnectivity(system) {
             reading?.online === true;
 
         const rssi =
-            online && Number.isFinite(reading?.rssi)
+            Number.isFinite(reading?.rssi)
                 ? `${reading.rssi.toFixed(0)} dBm`
                 : "—";
 
         const snr =
-            online && Number.isFinite(reading?.snr)
+            Number.isFinite(reading?.snr)
                 ? `${reading.snr.toFixed(1)} dB`
                 : "—";
 
         const sequence =
-            online && reading?.sequence != null
-                ? `#${reading.sequence}`
-                : (reading?.sequence != null ? `Last #${reading.sequence}` : "—");
+            reading?.sequence ?? "—";
 
         element.innerHTML = `
             <div style="font-weight:700;">
@@ -258,7 +256,7 @@ function updateHardwareConnectivity(system) {
                 color:${online ? "#10B981" : "#64748B"};
                 font-weight:700;
             ">
-                ${online ? "● LIVE" : "○ OFFLINE"}
+                ● ${online ? "LIVE" : "OFFLINE"}
             </div>
 
             <div style="
@@ -276,7 +274,7 @@ function updateHardwareConnectivity(system) {
                 font-size:10px;
                 color:var(--text-muted);
             ">
-                Packet ${sequence}
+                Packet #${sequence}
             </div>
         `;
     });
@@ -427,17 +425,15 @@ function isNodeClustered(nodeId) {
 // ==========================================================================
 function renderNodeMarker(node, reading) {
     if (node.latitude == null || node.longitude == null) return;
-    const isOnline = Boolean(reading && reading.online === true);
-    const color = isOnline ? getRiskColor(reading?.risk_level || "LOW") : "#64748b";
+    const color = reading?.online === false || !reading ? "#64748b" : getRiskColor(reading?.risk_level || "LOW");
     const iconPath = getNodeIcon(node.node_type);
     const nodeLabel = getNodeLabel(node.node_type);
 
     const isSelected = selectedNodeId === node.node_id ? "risk-marker-selected" : "";
-    const isCritical = (isOnline && (reading?.risk_level === "HIGH" || reading?.risk_level === "CRITICAL")) ? "critical-marker-div" : "";
-    const isOffline = !isOnline ? "marker-offline" : "";
+    const isCritical = reading?.risk_level === "HIGH" ? "critical-marker-div" : "";
 
     const markerHTML = `
-        <div class="sensor-marker ${isSelected} ${isCritical} ${isOffline}" id="marker-div-${node.node_id}">
+        <div class="sensor-marker ${isSelected} ${isCritical}" id="marker-div-${node.node_id}">
             <div class="risk-ring" style="border-color: ${color};">
                 <img src="${iconPath}" class="sensor-icon" alt="${nodeLabel}" />
             </div>
@@ -469,17 +465,15 @@ function renderNodeMarker(node, reading) {
     const tooltipHtml = `
         <strong>${node.node_id}</strong>
         <br>
-        <span style="color:${isOnline ? 'var(--status-green)' : 'var(--text-muted)'}; font-weight:700;">
-            ${isOnline ? "● LIVE" : "○ OFFLINE"}
-        </span>
+        ${reading?.online ? "● LIVE" : "○ OFFLINE"}
         ·
-        ${isOnline ? (reading?.risk_level || "NO DATA") : "NO TELEMETRY"}
+        ${reading?.risk_level || "NO DATA"}
 
         <br>
 
-        RSSI ${isOnline && Number.isFinite(reading?.rssi) ? `${reading.rssi.toFixed(0)} dBm` : "—"}
+        RSSI ${fmt(reading?.rssi, 0)} dBm
         ·
-        SNR ${isOnline && Number.isFinite(reading?.snr) ? `${reading.snr.toFixed(1)} dB` : "—"}
+        SNR ${fmt(reading?.snr, 1)} dB
     `;
 
     markers[node.node_id].bindTooltip(
@@ -567,7 +561,19 @@ function updateAlertsLog(readings, events=[]) {
                         <span class="alert-node">${alert.node_id}</span>
                         <span class="alert-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
                     </div>
-                    <div class="alert-reason">${alert.evidence || reason} — Risk Score: ${alert.risk_score.toFixed(1)}</div>
+                    <div class="alert-reason">
+                        ${alert.evidence || reason}
+                        — COPOD: ${
+                            Number.isFinite(alert.ml_score)
+                                ? alert.ml_score.toFixed(1)
+                                : "—"
+                        }
+                        · Validated Risk: ${
+                            Number.isFinite(alert.risk_score)
+                                ? alert.risk_score.toFixed(1)
+                                : "—"
+                        }
+                    </div>
                 </div>
             </div>
         `;
@@ -595,7 +601,23 @@ function updateAlertsLog(readings, events=[]) {
                 <td style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${alert.node_id}</td>
                 <td>${typeLabel}</td>
                 <td>${new Date(alert.timestamp).toLocaleString()}</td>
-                <td>${alert.risk_score.toFixed(1)} / 100</td>
+            <td>
+                <div style="font-weight:700;">
+                    ${
+                        Number.isFinite(alert.ml_score)
+                            ? alert.ml_score.toFixed(1)
+                            : "—"
+                    } / 100
+                </div>
+
+                <div style="
+                    font-size:9px;
+                    color:var(--text-muted);
+                    margin-top:2px;
+                ">
+                    COPOD OUTLIER
+                </div>
+            </td>
                 <td>${factors.join(" + ") || "ML Feature Shift"}</td>
                 <td>${currentMode === "REAL" ? `RSSI ${fmt(latestReadings[node.node_id]?.rssi)} / SNR ${fmt(latestReadings[node.node_id]?.snr)}` : "SIMULATION"}</td>
             </tr>
@@ -1076,26 +1098,19 @@ function updateSensorRegistryTable() {
         ) return;
         if (activeFilter === "high" && reading.risk_level !== "HIGH") return;
 
-        const isOnline = reading.online === true;
         const nodeLabel = node.node_type === "UnderGround" ? "Ground" : "Crack";
-        const badgeClass = !isOnline
-            ? "badge-muted"
-            : (reading.risk_level === "HIGH" || reading.risk_level === "CRITICAL")
-                ? "badge-red"
-                : reading.risk_level === "MEDIUM"
-                    ? "badge-amber"
-                    : "badge-green";
+        const badgeClass = reading.risk_level === "HIGH" ? "badge-red" : reading.risk_level === "MEDIUM" ? "badge-amber" : "badge-green";
         const rowActive = selectedNodeId === node.node_id ? "tr-active" : "";
 
         rowsHtml += `
             <tr class="${rowActive}" onclick="selectNodeAndSwitchTab('${node.node_id}')">
                 <td style="font-family: 'JetBrains Mono', monospace; font-weight:700;">${node.node_id}</td>
                 <td>${nodeLabel}</td>
-                <td><strong style="color:${isOnline ? 'var(--status-green)' : 'var(--text-muted)'};">${isOnline ? (reading.status || "ONLINE") : "OFFLINE"}</strong></td>
-                <td><span class="status-badge ${badgeClass}">${isOnline ? reading.risk_level : "OFFLINE"}</span></td>
+                <td><strong>${reading.status || "OFFLINE"}</strong></td>
+                <td><span class="status-badge ${badgeClass}">${reading.risk_level}</span></td>
                 <td>${fmt(reading.battery)}${reading.battery == null ? "" : "%"}</td>
                 <td>${reading.timestamp ? new Date(reading.timestamp).toLocaleTimeString() : "UNAVAILABLE"}</td>
-                <td>${currentMode === "REAL" ? (isOnline ? `RSSI ${fmt(latestReadings[node.node_id]?.rssi)} / SNR ${fmt(latestReadings[node.node_id]?.snr)}` : "OFFLINE") : "SIMULATION"}</td>
+                <td>${currentMode === "REAL" ? `RSSI ${fmt(latestReadings[node.node_id]?.rssi)} / SNR ${fmt(latestReadings[node.node_id]?.snr)}` : "SIMULATION"}</td>
             </tr>
         `;
     });
@@ -1499,37 +1514,11 @@ async function pollDataPipeline() {
             ` · Received: ${system.usb?.received ?? 0} · Live updates: ${system.usb?.applied ?? 0} · Duplicates: ${system.usb?.duplicates ?? 0} · Historical: ${system.usb?.historical ?? 0} · Latest received sequence: ${system.usb?.last_sequence ?? 'UNAVAILABLE'} · ${system.usb?.last_result || system.usb?.last_error || 'Waiting for telemetry'}`;
         nodesList = registered;
         latestReadings = Object.fromEntries(readingsData.map(r => [r.node_id,r]));
-        // One shared telemetry snapshot for the InSAR animation; no extra polling.
-        window.TerraVeilTelemetry = {mode:system.mode, nodes:registered, readings:readingsData, receivedAt:Date.now()};
-        window.dispatchEvent(new CustomEvent('terraveil:telemetry', {detail:window.TerraVeilTelemetry}));
         updateHardwareConnectivity(system);
         window.backendZones = twin.zones;
         selectedNodeId ||= nodesList[0]?.node_id;
-        const onlineCount = readingsData.filter(r => r.online === true).length;
-        document.getElementById('kpi-active-nodes').textContent = `${onlineCount} / ${nodesList.length}`;
-        const activeStatusEl = document.getElementById('kpi-active-status');
-        if (activeStatusEl) {
-            if (onlineCount === 0) {
-                activeStatusEl.textContent = 'ALL OFFLINE';
-                activeStatusEl.className = 'kpi-status status-red';
-            } else if (onlineCount < nodesList.length) {
-                activeStatusEl.textContent = `${onlineCount} ONLINE · ${nodesList.length - onlineCount} OFFLINE`;
-                activeStatusEl.className = 'kpi-status status-amber';
-            } else {
-                activeStatusEl.textContent = `${onlineCount} ONLINE`;
-                activeStatusEl.className = 'kpi-status status-green';
-            }
-        }
-        const mapLiveTag = document.getElementById('map-live-tag');
-        if (mapLiveTag) {
-            if (onlineCount > 0) {
-                mapLiveTag.textContent = '● LIVE';
-                mapLiveTag.classList.remove('offline');
-            } else {
-                mapLiveTag.textContent = '○ OFFLINE';
-                mapLiveTag.classList.add('offline');
-            }
-        }
+        document.getElementById('kpi-active-nodes').textContent = `${readingsData.filter(r=>r.online).length} / ${nodesList.length}`;
+        document.getElementById('kpi-active-status').textContent = `${readingsData.filter(r=>r.online).length} ONLINE`;
         document.getElementById('kpi-system-health').textContent = system.mother_host;
         document.getElementById('kpi-sync-sec').textContent = '2s';
         const totalReadingsStored = system.readings_count;
@@ -1537,21 +1526,6 @@ async function pollDataPipeline() {
 
         // Calculate and map spatial clusters (Contour deformation areas)
         calculateSpatialClusters(nodesList, latestReadings);
-
-        // Clean up map markers and polylines that are no longer registered
-        const activeNodeIds = new Set(nodesList.map(n => n.node_id));
-        Object.keys(markers).forEach(nodeId => {
-            if (!activeNodeIds.has(nodeId)) {
-                map.removeLayer(markers[nodeId]);
-                delete markers[nodeId];
-            }
-        });
-        Object.keys(crackLines).forEach(nodeId => {
-            if (!activeNodeIds.has(nodeId)) {
-                map.removeLayer(crackLines[nodeId]);
-                delete crackLines[nodeId];
-            }
-        });
 
         // Render and update map node markers
         nodesList.forEach(node => {

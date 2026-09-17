@@ -212,7 +212,14 @@ def ingest(payload, source="REAL"):
                 ]
                 filtered[field] = median([row[field], *prior])
 
-        candidate, _ = calculate_risk(node["node_type"], filtered)
+        candidate, ml_level = calculate_risk(
+            node["node_type"],
+            filtered
+        )
+
+        # Preserve the raw COPOD result separately from the
+        # network-validated TerraVeil risk state.
+        row["ml_score"] = round(candidate, 2)
         amplitude = math.hypot(row.get("tilt_x", 0), row.get("tilt_y", 0))
         abnormal = (
             amplitude >= 0.8

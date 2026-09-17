@@ -110,6 +110,7 @@ def init_db():
 
     columns = {row[1] for row in conn.execute("PRAGMA table_info(readings)")}
     additions = {
+        "ml_score": "REAL",
         "data_source": "TEXT NOT NULL DEFAULT 'SIMULATION'",
         "host_id": "TEXT",
         "zone_id": "TEXT",

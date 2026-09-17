@@ -696,7 +696,7 @@
 
         if (!recommendedLayerGroup) {
             recommendedLayerGroup = L.layerGroup();
-            mapInstance.addLayer(recommendedLayerGroup);
+            if(window.TerraVeilTelemetry?.mode!=='REAL') mapInstance.addLayer(recommendedLayerGroup);
         }
 
         recommendedLayerGroup.clearLayers();
@@ -1308,7 +1308,7 @@
             mapInstance.removeLayer(recommendedLayerGroup);
             if (toggleBtn) toggleBtn.classList.remove('active');
         } else {
-            mapInstance.addLayer(recommendedLayerGroup);
+            if(window.TerraVeilTelemetry?.mode!=='REAL') mapInstance.addLayer(recommendedLayerGroup);
             if (toggleBtn) toggleBtn.classList.add('active');
         }
     }
@@ -1412,7 +1412,32 @@
         });
     }
 
-    function init(map) {
+    window.addEventListener('terraveil:telemetry',event=>{
+        if(event.detail.mode==='REAL'&&recommendedLayerGroup&&mapInstance?.hasLayer(recommendedLayerGroup))mapInstance.removeLayer(recommendedLayerGroup);
+    });
+    let pendingSave=null,saving=false,saveTimer;
+    function saveStatus(message) {
+        let el=document.getElementById('placement-save-status');
+        if(!el){el=document.createElement('p');el.id='placement-save-status';el.setAttribute('role','status');document.getElementById('view-placement')?.prepend(el);}
+        el.textContent=message;
+    }
+    async function persistPlan() {
+        if(saving||!pendingSave)return;
+        saving=true;const plan=pendingSave;pendingSave=null;
+        try {
+            const r=await fetch('/api/simulation/placement',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(plan)});
+            if(!r.ok)throw new Error('Could not save the simulation placement');
+            saveStatus(`Simulation follows this placement: ${plan.nodes.length} nodes saved. Hardware remains 3 nodes.`);
+        } catch(error){pendingSave=pendingSave||plan;saveStatus(error.message+' — retrying.');}
+        finally{saving=false;if(pendingSave)saveTimer=setTimeout(persistPlan,2000);}
+    }
+    window.addEventListener('terraveil:nodes-updated',event=>{
+        if(event.detail?.restored)return;
+        pendingSave=JSON.parse(JSON.stringify({nodes:event.detail.nodes,config:window.TerraVeilState.deploymentConfig,stats:window.TerraVeilState.analysisStats}));
+        clearTimeout(saveTimer);saveTimer=setTimeout(persistPlan,300);
+    });
+
+    async function init(map) {
         mapInstance = map;
 
         // Wire Header Buttons on 2D map
@@ -1429,8 +1454,22 @@
         // Wire Section Events
         wireSectionEvents();
 
-        // Initial recomputation
-        runRecompute();
+        // Restore the exact plan; opening a page must not silently reset its count.
+        try {
+            const r=await fetch('/api/simulation/placement',{cache:'no-store'});
+            if(!r.ok)throw new Error('Placement restore failed');
+            const {plan}=await r.json();
+            if(plan){
+                window.TerraVeilState.recommendedNodes=plan.nodes;
+                Object.assign(window.TerraVeilState.deploymentConfig,plan.config||{});
+                Object.assign(window.TerraVeilState.analysisStats,plan.stats||{});
+                plan.nodes.filter(n=>n.status==='field_reviewed').forEach(n=>window.TerraVeilState.manualAdjustments.set(n.id,{lat:n.latitude,lon:n.longitude,status:n.status}));
+                rankedZonesCache=calculateZonePriorities(await ensureInSARFeaturesLoaded());
+                render2DMapLayers(plan.nodes);renderDrawerUI();renderNodePlacementSection();
+                window.dispatchEvent(new CustomEvent('terraveil:nodes-updated',{detail:{nodes:plan.nodes,restored:true}}));
+                saveStatus(`Simulation follows this placement: ${plan.nodes.length} nodes saved. Hardware remains 3 nodes.`);
+            } else await runRecompute();
+        } catch(error){saveStatus(error.message+' — saved placement was not overwritten.');}
     }
 
     // Global engine interface
@@ -1443,6 +1482,7 @@
         generateZoneAnchors,
         buildCanonicalRecommendations,
         recompute: runRecompute,
+        show: renderNodePlacementSection,
         exportGeoJSON,
         selectNode,
         togglePlacementPanel,

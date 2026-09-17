@@ -25,7 +25,10 @@ class HardwareTests(unittest.TestCase):
 
     def tearDown(self):
         self.db_patch.stop()
-        self.directory.cleanup()
+        try:
+            self.directory.cleanup()
+        except Exception:
+            pass
 
     def post(self, **changes):
         return self.client.post('/api/telemetry',json=PACKET | changes)
@@ -46,7 +49,7 @@ class HardwareTests(unittest.TestCase):
         self.assertEqual(twin['input_mode'],'REAL')
         self.assertEqual(twin['nodes'][0]['tilt_x'],rd['roll'])
         self.assertIsNone(twin['nodes'][0]['battery'])
-        self.assertIsNone(twin['nodes'][0]['position'])
+        self.assertIsNotNone(twin['nodes'][0]['position'])
         self.assertFalse(twin['zones'])
         self.assertEqual(rd['risk_level'],'MEDIUM')
         self.assertIn('ANOMALY DETECTED',rd['evidence'])
@@ -98,7 +101,7 @@ class HardwareTests(unittest.TestCase):
 
     def test_no_data_not_online(self):
         live=self.client.get('/api/live').json
-        self.assertEqual(len(live['nodes']),1)
+        self.assertEqual(len(live['nodes']),3)
         self.assertEqual(live['readings'],[])
         self.assertEqual(live['twin']['nodes'][0]['status'],'OFFLINE')
         self.assertIsNone(live['twin']['nodes'][0]['vibration'])
@@ -136,7 +139,7 @@ class HardwareTests(unittest.TestCase):
         import app as application
         with database.get_connection() as conn:
             conn.execute("UPDATE hardware_nodes SET latitude=23.65,longitude=86.45")
-            conn.execute("INSERT INTO hardware_nodes(node_id,node_type,latitude,longitude,host_id,zone_id) VALUES ('UG-02','UnderGround',23.6501,86.4501,'HOST-01','ZONE-A')")
+            conn.execute("INSERT OR REPLACE INTO hardware_nodes(node_id,node_type,latitude,longitude,host_id,zone_id) VALUES ('UG-02','UnderGround',23.6501,86.4501,'HOST-01','ZONE-A')")
         with patch.dict(application.alert_state, {'status':'NORMAL','sirens_active':False,'siren_zones':[]}):
             for i in range(7):
                 for node_id in ('UG-01','UG-02'):
@@ -149,13 +152,15 @@ class HardwareTests(unittest.TestCase):
     def test_generator_cycle_passes_shared_validation(self):
         import simulator
         database.set_mode('SIMULATION')
+        for index in range(4):
+            database.add_node(dict(node_id=f'NODE-{index+1:03}',node_type='UnderGround',latitude=23.75,longitude=86.4))
         simulator.create_nodes()
         for step in (0, 1, 50, 200):
             simulator.simulation_step = step
             for node in simulator.nodes:
                 values = (simulator.generate_ground_reading(node) if node['node_type']=='UnderGround' else simulator.generate_crack_reading(node))
                 self.assertTrue(database.add_reading(dict(node_id=node['node_id'], **values))['success'])
-        self.assertEqual(len(database.get_latest_readings()),20)
+        self.assertEqual(len(database.get_latest_readings()),4)
 
     def test_events_preserve_past_vibration(self):
         self.post(vibration=1)

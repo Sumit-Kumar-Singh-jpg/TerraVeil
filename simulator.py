@@ -4,83 +4,22 @@ import time
 import threading
 from datetime import datetime
 
-from database import add_node, add_reading, mode
+from database import add_reading, mode, get_nodes
 
 
-NUM_NODES = 20
-
-
-
-# Chasnalla Colliery demo area
-# Approximate center based on documented Chasnalla location
+# Chasnalla Colliery demo area — centre used for spatial deformation gradient.
 CENTER_LAT = 23.657
 CENTER_LON = 86.452
 
-MINE_LAT_MIN = 23.648
-MINE_LAT_MAX = 23.672
-
-MINE_LON_MIN = 86.435
-MINE_LON_MAX = 86.468
 nodes = []
 
 simulation_step = 0
 
 
-def random_mine_location():
-
-    return (
-        random.uniform(
-            MINE_LAT_MIN,
-            MINE_LAT_MAX
-        ),
-        random.uniform(
-            MINE_LON_MIN,
-            MINE_LON_MAX
-        )
-    )
-
 def create_nodes():
-
-    global nodes
-
+    """Populate from placement-predicted nodes only (no fixed generator)."""
     nodes.clear()
-    random.seed(42)
-
-    for i in range(NUM_NODES):
-
-        lat, lon = random_mine_location()
-        # 70% normal UnderGround nodes
-        if i < int(NUM_NODES * 0.7):
-
-            node = {
-                "node_id": f"G-{i+1:03}",
-                "node_type": "UnderGround",
-                "latitude": lat,
-                "longitude": lon
-            }
-
-        else:
-
-            # Crack sensor represented by two poles
-            pole_a_lat = lat - 0.0003
-            pole_a_lon = lon - 0.0003
-
-            pole_b_lat = lat + 0.0003
-            pole_b_lon = lon + 0.0003
-
-            node = {
-                "node_id": f"C-{i+1:03}",
-                "node_type": "crack",
-                "latitude": lat,
-                "longitude": lon,
-                "pole_a_lat": pole_a_lat,
-                "pole_a_lon": pole_a_lon,
-                "pole_b_lat": pole_b_lat,
-                "pole_b_lon": pole_b_lon
-            }
-
-        add_node(node)
-        nodes.append(node)
+    nodes.extend(get_nodes('SIMULATION'))
 
 
 def generate_ground_reading(node):
@@ -105,9 +44,11 @@ def generate_ground_reading(node):
         )
 
         # Nodes near the centre experience more deformation
+        node_lat = node.get("latitude") if node.get("latitude") is not None else CENTER_LAT
+        node_lon = node.get("longitude") if node.get("longitude") is not None else CENTER_LON
         distance = math.sqrt(
-            (node["latitude"] - CENTER_LAT) ** 2 +
-            (node["longitude"] - CENTER_LON) ** 2
+            (node_lat - CENTER_LAT) ** 2 +
+            (node_lon - CENTER_LON) ** 2
         )
 
         spatial_factor = max(
@@ -151,9 +92,11 @@ def generate_crack_reading(node):
             (simulation_step - 30) / 100
         )
 
+        node_lat = node.get("latitude") if node.get("latitude") is not None else CENTER_LAT
+        node_lon = node.get("longitude") if node.get("longitude") is not None else CENTER_LON
         distance = math.sqrt(
-            (node["latitude"] - CENTER_LAT) ** 2 +
-            (node["longitude"] - CENTER_LON) ** 2
+            (node_lat - CENTER_LAT) ** 2 +
+            (node_lon - CENTER_LON) ** 2
         )
 
         spatial_factor = max(
@@ -195,7 +138,7 @@ def run_simulation():
 
         simulation_step += 1
 
-        for node in nodes:
+        for node in get_nodes('SIMULATION'):
 
             if node["node_type"] == "UnderGround":
 
@@ -207,7 +150,11 @@ def run_simulation():
 
             reading = {"node_id": node["node_id"], **values}
 
-            add_reading(reading)
+            try:
+                add_reading(reading)
+            except ValueError:
+                if node['node_id'] in {n['node_id'] for n in get_nodes('SIMULATION')}:
+                    raise
 
         time.sleep(2)
 
@@ -227,4 +174,107 @@ def start_simulator():
         daemon=True
     )
 
+    thread.start()
+
+
+_hw_sim_started = False
+_hw_sim_stop = threading.Event()
+
+
+def run_hardware_simulation(ingest_fn):
+    seq = {"UG-01": 1, "UG-02": 1, "LD-01": 1}
+    try:
+        from database import get_connection
+        with get_connection() as conn:
+            for nid in seq.keys():
+                row = conn.execute(
+                    "SELECT MAX(sequence) FROM readings WHERE node_id=? AND data_source='REAL'",
+                    (nid,),
+                ).fetchone()
+                if row and row[0] is not None:
+                    seq[nid] = int(row[0]) + 1
+    except Exception:
+        pass
+
+    while not _hw_sim_stop.is_set():
+        try:
+            # If physical USB serial is actively connected and feeding, yield to real hardware
+            try:
+                import serial_bridge
+                if serial_bridge.health().get("status") == "CONNECTED":
+                    _hw_sim_stop.wait(2.0)
+                    continue
+            except Exception:
+                pass
+
+            # UG-01 packet
+            roll1 = round(random.gauss(0.18, 0.04), 2)
+            pitch1 = round(random.gauss(-0.09, 0.04), 2)
+            soil1 = random.randint(2190, 2225)
+            p1 = {
+                "node_id": "UG-01",
+                "host_id": "HOST-01",
+                "zone_id": "ZONE-A",
+                "sequence": seq["UG-01"],
+                "roll": roll1,
+                "pitch": pitch1,
+                "vibration": 0,
+                "soil": soil1,
+                "rssi": -62,
+                "snr": 9.25,
+            }
+            seq["UG-01"] += 1
+            ingest_fn(p1)
+
+            # UG-02 packet
+            roll2 = round(random.gauss(-0.32, 0.04), 2)
+            pitch2 = round(random.gauss(0.24, 0.04), 2)
+            soil2 = random.randint(2160, 2195)
+            p2 = {
+                "node_id": "UG-02",
+                "host_id": "HOST-01",
+                "zone_id": "ZONE-A",
+                "sequence": seq["UG-02"],
+                "roll": roll2,
+                "pitch": pitch2,
+                "vibration": 0,
+                "soil": soil2,
+                "rssi": -65,
+                "snr": 8.80,
+            }
+            seq["UG-02"] += 1
+            ingest_fn(p2)
+
+            # LD-01 packet
+            disp = round(abs(random.gauss(1.15, 0.03)), 2)
+            pot = random.randint(1840, 1875)
+            p3 = {
+                "node_id": "LD-01",
+                "host_id": "HOST-01",
+                "zone_id": "ZONE-A",
+                "sequence": seq["LD-01"],
+                "displacement_mm": disp,
+                "potentiometer_raw": pot,
+                "rssi": -68,
+                "snr": 8.10,
+            }
+            seq["LD-01"] += 1
+            ingest_fn(p3)
+
+        except Exception:
+            pass
+
+        _hw_sim_stop.wait(2.0)
+
+
+def start_hardware_simulator(ingest_fn):
+    global _hw_sim_started
+    if _hw_sim_started:
+        return
+    _hw_sim_started = True
+    thread = threading.Thread(
+        target=run_hardware_simulation,
+        args=(ingest_fn,),
+        daemon=True,
+    )
     thread.start()

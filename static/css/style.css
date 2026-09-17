@@ -787,6 +787,12 @@ body,
     font-family: 'JetBrains Mono', monospace;
 }
 
+.live-tag.offline {
+    background-color: rgba(100, 116, 139, 0.15);
+    color: #94a3b8;
+    border-color: rgba(100, 116, 139, 0.35);
+}
+
 .map-legend {
     display: flex;
     align-items: center;
@@ -933,6 +939,16 @@ body,
     box-shadow: 0 0 8px var(--status-red);
 }
 
+.marker-offline {
+    opacity: 0.7;
+    filter: grayscale(0.8);
+}
+
+.marker-offline:hover {
+    opacity: 1;
+    filter: none;
+}
+
 /* --------------------------------------------------------------------------
    8. SELECTED NODE SIDEBAR (RIGHT PANEL)
    -------------------------------------------------------------------------- */
@@ -1021,6 +1037,12 @@ body,
     background-color: var(--status-red-bg);
     color: var(--status-red);
     border: 1px solid var(--status-red-border);
+}
+
+.badge-muted, .badge-gray {
+    background-color: rgba(100, 116, 139, 0.12);
+    color: #94a3b8;
+    border: 1px solid rgba(100, 116, 139, 0.3);
 }
 
 /* Telemetry Grid */

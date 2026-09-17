@@ -7,6 +7,7 @@ if __name__ == '__main__':
         raise SystemExit(str(error))
 
 from pathlib import Path
+import os
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from datetime import datetime
 
@@ -24,6 +25,8 @@ from digital_twin import build_twin_state
 app = Flask(__name__)
 from insar import insar
 app.register_blueprint(insar)
+from simulation_placement import placement_api
+app.register_blueprint(placement_api)
 app.config["MAX_CONTENT_LENGTH"] = 8192
 init_db()
 
@@ -270,6 +273,11 @@ if __name__ == "__main__":
     import serial_bridge
     logging.basicConfig(level=logging.INFO)
     serial_bridge.start(accept_telemetry)
+
+    # Start live hardware simulator for UG-01, UG-02, and LD-01 only when explicitly enabled
+    if os.environ.get("TERRAVEIL_SIMULATE_HARDWARE", "0") == "1":
+        from simulator import start_hardware_simulator
+        start_hardware_simulator(accept_telemetry)
 
     app.run(
         debug=False,

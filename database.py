@@ -1,4 +1,5 @@
 import sqlite3
+import math
 import os
 from pathlib import Path
 from datetime import datetime
@@ -14,11 +15,23 @@ HARDWARE_NODES = (
 
 # Demo GIS positions for the three REAL physical nodes.
 # These are visualization/demo coordinates, NOT measured GPS positions.
+def _destination(lat, lon, bearing, distance_m):
+    phi, lam, theta = map(math.radians, (lat, lon, bearing))
+    arc = distance_m / 6371000
+    phi2 = math.asin(math.sin(phi)*math.cos(arc)+math.cos(phi)*math.sin(arc)*math.cos(theta))
+    lam2 = lam+math.atan2(math.sin(theta)*math.sin(arc)*math.cos(phi),math.cos(arc)-math.sin(phi)*math.sin(phi2))
+    return math.degrees(phi2), math.degrees(lam2)
+
+
+# Planned positions, not surveyed GPS. All three spherical distances are 1 km.
+_anchor = (23.6570, 86.4515)
+_triangle_angle = math.degrees(math.acos(math.cos(1000/6371000)/(1+math.cos(1000/6371000))))
 HARDWARE_DEMO_COORDS = {
-    "UG-01": (23.6570, 86.4515),
-    "UG-02": (23.6580, 86.4530),
-    "LD-01": (23.6564, 86.4540),
+    "UG-01": _anchor,
+    "UG-02": _destination(*_anchor, 90, 1000),
+    "LD-01": _destination(*_anchor, 90-_triangle_angle, 1000),
 }
+
 
 def get_connection():
     conn = sqlite3.connect(DB_NAME, timeout=15)
@@ -67,6 +80,10 @@ def init_db():
             pole_b_lon REAL
         )
     """)
+
+    node_columns = {row[1] for row in conn.execute("PRAGMA table_info(nodes)")}
+    if "active" not in node_columns:
+        conn.execute("ALTER TABLE nodes ADD COLUMN active INTEGER NOT NULL DEFAULT 0")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS readings (
@@ -185,6 +202,13 @@ def init_db():
         # Environment coordinates still override demo coordinates if supplied.
         _apply_hardware_coordinates(conn, node_id)
 
+    # Enforce that the hardware registry contains ONLY these 3 valid nodes
+    valid_ids = [n[0] for n in HARDWARE_NODES]
+    conn.execute(
+        f"DELETE FROM hardware_nodes WHERE node_id NOT IN ({','.join('?' for _ in valid_ids)})",
+        valid_ids,
+    )
+
     conn.commit()
     conn.close()
 
@@ -192,8 +216,10 @@ def init_db():
 def add_node(node):
     conn = get_connection()
     conn.execute("""
-        INSERT OR IGNORE INTO nodes
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO nodes(node_id,node_type,latitude,longitude,pole_a_lat,pole_a_lon,pole_b_lat,pole_b_lon,active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT(node_id) DO UPDATE SET node_type=excluded.node_type,
+        latitude=excluded.latitude,longitude=excluded.longitude,active=1
     """, (
         node["node_id"],
         node["node_type"],
@@ -231,7 +257,12 @@ def get_nodes(source=None):
     source = source or mode()
     with get_connection() as conn:
         table = "hardware_nodes" if source == "REAL" else "nodes"
-        return [dict(r) for r in conn.execute(f"SELECT * FROM {table}")]
+        where = "" if source == "REAL" else " WHERE active=1"
+        nodes = [dict(r) for r in conn.execute(f"SELECT * FROM {table}"+where)]
+        if source == "REAL":
+            for node in nodes:
+                node['position_source'] = 'configured' if os.environ.get(_coordinate_env_prefix(node['node_id'])+'_LATITUDE') else 'planned_1km'
+        return nodes
 
 
 def get_latest_readings(source=None):
@@ -247,7 +278,8 @@ def get_latest_readings(source=None):
              GROUP BY r.node_id)
         """, (source,)).fetchall()
     from telemetry import decorate
-    return [decorate(dict(r)) for r in rows]
+    active_ids = {n['node_id'] for n in get_nodes(source)}
+    return [decorate(dict(r)) for r in rows if r['node_id'] in active_ids]
 
 
 def get_history(node_id, limit=100, source=None):

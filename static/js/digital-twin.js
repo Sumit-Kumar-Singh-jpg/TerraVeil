@@ -162,21 +162,6 @@ function hardware(templateName){
     root.traverse(part=>{if(part.isMesh){part.castShadow=true;part.receiveShadow=true;if(['led','beacon','battery','link'].includes(part.userData.role)){part.material=part.material.clone();part.material.vertexColors=false;}}});
     scene.add(root);return root;
 }
-function updateNodes(snapshot){
-    const ids=new Set(snapshot.nodes.map(n=>n.node_id));
-    for(const [id,item] of nodeObjects)if(!ids.has(id)){scene.remove(item.root,item.label);item.label.material.map.dispose();item.label.material.dispose();nodeObjects.delete(id);}
-    for(const node of snapshot.nodes){
-        if (!node.position) continue;
-        const color=node.status==='ONLINE'?COLORS[node.risk_level]:COLORS.OFFLINE;let item=nodeObjects.get(node.node_id);
-        if(!item){const root=hardware(node.node_type==='crack'?'CRACK_TEMPLATE':'GROUND_TEMPLATE');const label=makeLabel(node.node_id,color);label.scale.set(6,2.06,1);scene.add(label);item={root,label,color};nodeObjects.set(node.node_id,item);}
-        if(item.color!==color){const label=makeLabel(node.node_id,color);item.label.material.map.dispose();item.label.material.map=label.material.map;label.material.dispose();item.color=color;}
-        const [x,,z]=node.position;item.root.position.set(x,surface(x,z),z);item.root.rotation.set(THREE.MathUtils.degToRad(node.tilt_x||0),0,-THREE.MathUtils.degToRad(node.tilt_y||0));
-        item.label.position.set(x,surface(x,z)+4.1,z);item.label.visible=$('twin-markers').checked;item.label.userData.nodeId=node.node_id;
-        item.root.traverse(part=>{part.userData.nodeId=node.node_id;if(!part.isMesh)return;const role=part.userData.role;
-            if(role==='led'){part.material.color.set(color);part.material.emissive.set(color);part.material.emissiveIntensity=.9;}
-            if(role==='battery'){if(node.battery==null)part.material.color.set('#657689');else part.material.color.setRGB(1-node.battery/100,node.battery/100,.03);}
-            if(role==='link')part.material.color.set(node.status==='ONLINE'?'#498eea':'#657689');
-            if(role==='anchor_b')part.position.set(.564643*(node.displacement_mm||0)*state.gain/1000,0,.825335*(node.displacement_mm||0)*state.gain/1000);
 // --- Georeferencing Adapter (Section 13 & 14) ---
 const GEO_BOUNDS = { lat_min: 23.648, lat_max: 23.672, lon_min: 86.435, lon_max: 86.468 };
 
@@ -226,7 +211,7 @@ function updateNodes(snapshot){
         });
     }
     const select=$('twin-node-select');
-    const recNodes = window.TerraVeilState?.recommendedNodes || [];
+    const recNodes = []; // Runtime inventory comes only from the selected source's backend nodes.
     const allIds = [...snapshot.nodes.map(n=>n.node_id), ...recNodes.map(r=>r.id)];
     
     if(Array.from(select.options).map(o=>o.value).join('|')!==allIds.join('|')){
@@ -272,7 +257,7 @@ function applySnapshot(snapshot){
 }
 function showSelected(){
     const recNode = window.TerraVeilState?.recommendedNodes?.find(r => r.id === state.selected);
-    if (recNode) {
+    if (recNode && !state.snapshot?.nodes.some(n=>n.node_id===state.selected)) {
         // Render Recommended Planning Node in Inspector
         $('twin-node-id').textContent = `${recNode.id} (Zone ${recNode.zone_id})`;
         $('twin-node-risk').textContent = recNode.status === 'field_reviewed' ? 'FIELD REVIEWED' : 'RECOMMENDED';

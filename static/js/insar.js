@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { GroundMotionOverlay } from './ground-motion.js';
+let groundMotion;
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const $ = id => document.getElementById(id);
@@ -88,6 +90,8 @@ async function initialize() {
         samples = new Float32Array(buffer);
         createScene(); fillMetadata(); updateLayer(); setCamera(false); update3DRecommendedNodes();
         ready = true; stage.dataset.ready = 'true';
+        groundMotion = new GroundMotionOverlay(scene, projectNode, surfaceHeight, position => {controls.target.copy(position); camera.position.copy(position).add(new THREE.Vector3(2,2,3)); controls.update();});
+        update3DRecommendedNodes();
         inspect(Math.floor(g.rows / 2), Math.floor(g.columns / 2));
         $('insar-loading').hidden = true;
         resize();
@@ -151,6 +155,8 @@ function createScene() {
         const rect = renderer.domElement.getBoundingClientRect();
         ray.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1, -(event.clientY-rect.top)/rect.height*2+1), camera);
         
+        const liveId = groundMotion?.hit(ray);
+        if (liveId) {groundMotion.select(liveId); return;}
         // 1. Raycast recommended 3D node markers first
         const nodeHits = ray.intersectObjects(node3DObjects, true);
         if (nodeHits.length > 0) {
@@ -176,9 +182,26 @@ function createScene() {
     });
     renderer.setAnimationLoop(() => {
         if (!active || !ready || document.hidden) return;
+        groundMotion?.tick(performance.now()/1000);
         controls.update(); renderer.render(scene,camera);
     });
     stage.dataset.triangles = String(indices.length/3);
+}
+
+// Historical DEM heights only; live effects are drawn in a separate mesh.
+function surfaceHeight(x,z) {
+    const g=manifest.grid;
+    const col=Math.round((x*1000+centerEast-g.x_first)/g.x_step);
+    const row=Math.round((-z*1000+centerNorth-g.y_first)/g.y_step);
+    if(row<0||col<0||row>=g.rows||col>=g.columns)return null;
+    const i=(row*g.columns+col)*7;
+    return samples[i+6]&1 ? (samples[i]-floor)/1000*relief : null;
+}
+function projectNode(node) {
+    if(!Number.isFinite(node.latitude)||!Number.isFinite(node.longitude))return null;
+    const p=wgs84ToUtm45N(node.latitude,node.longitude);
+    const x=(p.easting-centerEast)/1000,z=-(p.northing-centerNorth)/1000,y=surfaceHeight(x,z);
+    return y===null?null:new THREE.Vector3(x,y,z);
 }
 
 function update3DRecommendedNodes() {
@@ -197,7 +220,9 @@ function update3DRecommendedNodes() {
     node3DObjects.length = 0;
     node3DLookup.clear();
 
-    const nodes = window.TerraVeilState?.recommendedNodes || [];
+    const live=window.TerraVeilTelemetry;
+    const activeIds=new Set(live?.nodes.map(n=>n.node_id)||[]);
+    const nodes = live?.mode==='REAL'?[]:(window.TerraVeilState?.recommendedNodes || []).filter(n=>!activeIds.has(n.id));
     const g = manifest.grid;
 
     nodes.forEach(node => {
@@ -323,6 +348,7 @@ function updateRelief() {
     for(let i=0;i<position.count;i++)position.setY(i,(samples[i*7]-floor)/1000*relief);
     position.needsUpdate=true;terrain.geometry.computeVertexNormals();terrain.geometry.computeBoundingSphere();
     node3DObjects.forEach(m => { m.position.y = (m.userData.elev - floor) / 1000 * relief + 0.20; });
+    groundMotion?.reproject();
     if(selected!==null)inspect(Math.floor(selected/manifest.grid.columns),selected%manifest.grid.columns);
 }
 
@@ -342,6 +368,7 @@ function resize() {
 }
 
 function disposeScene() {
+    groundMotion?.dispose(); groundMotion=null;
     controls?.dispose();renderer?.setAnimationLoop(null);
     scene?.traverse(object=>{object.geometry?.dispose();if(object.material){object.material.map?.dispose();object.material.dispose();}});
     renderer?.dispose();renderer?.domElement.remove();renderer=null;terrain=null;
@@ -363,4 +390,10 @@ window.addEventListener('terraveil:nodes-updated', () => {
 });
 window.addEventListener('terraveil:node-selected', (e) => {
     if (ready) highlight3DNode(e.detail?.nodeId);
+});
+
+let placementVisibilityKey='';
+window.addEventListener('terraveil:telemetry',e=>{
+    const key=e.detail.mode+'|'+e.detail.nodes.map(n=>n.node_id).join('|');
+    if(key!==placementVisibilityKey){placementVisibilityKey=key;if(ready)update3DRecommendedNodes();}
 });

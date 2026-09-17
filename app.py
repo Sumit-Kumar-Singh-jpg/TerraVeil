@@ -56,7 +56,54 @@ alert_state = {
 def index():
     return render_template("index.html")
 
+@app.route("/api/demo/reset", methods=["POST"])
+def demo_reset():
+    global alert_state
 
+    if mode() != "REAL":
+        return jsonify(
+            success=False,
+            error="Demo reset is only available in REAL HARDWARE mode"
+        ), 400
+
+    # --------------------------------------------------------
+    # 1. Reset siren / emergency state
+    # --------------------------------------------------------
+
+    alert_state["status"] = "NORMAL"
+    alert_state["sirens_active"] = False
+    alert_state["triggered_at"] = None
+    alert_state["acknowledged_at"] = datetime.utcnow().isoformat()
+    alert_state["message"] = (
+        "Demo reset complete. Waiting for fresh physical telemetry."
+    )
+
+    for siren in alert_state["siren_zones"]:
+        siren["status"] = "OFF"
+
+    # --------------------------------------------------------
+    # 2. Begin a fresh LIVE monitoring epoch for every node
+    #
+    # IMPORTANT:
+    # This DOES NOT delete readings.
+    # Previous readings remain available in SQLite/history.
+    # --------------------------------------------------------
+
+    sessions = {}
+
+    for node in get_nodes("REAL"):
+        node_id = node["node_id"]
+
+        sessions[node_id] = start_node_session(
+            node_id
+        )
+
+    return jsonify(
+        success=True,
+        message="Demo reset complete",
+        sessions=sessions
+    )
+    
 def accept_telemetry(payload):
     result = ingest(payload)
     if result.get('applied') and result.get('risk_level') == 'CRITICAL' and mode() == 'REAL':

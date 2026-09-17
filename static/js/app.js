@@ -1275,7 +1275,21 @@ function updateDiagnosticsData(nodeCount, readingsCount) {
 // RED ALERT & MINE SIRENS SUBSYSTEM
 // ==========================================================================
 let isRedAlertActive = false;
+
 let autoAnomalyLatched = false;
+
+// After ACK, automatic siren triggering stays locked
+// until all physical nodes have returned to normal.
+let autoSirenNeedsNormalization = false;
+
+// Require normal state for multiple polling cycles.
+// This prevents one transient normal packet from re-arming.
+let normalPollStreak = 0;
+
+const NORMAL_POLLS_REQUIRED = 2;
+
+// Prevent two alert HTTP requests from running simultaneously.
+let alertTriggerInFlight = false;
 let alertDurationTimer = null;
 let alertStartTimestamp = null;
 let sirenAudioCtx = null;
@@ -1428,42 +1442,142 @@ function exitRedAlertUI() {
 
 // Trigger emergency alert via API
 async function triggerEmergencyAlert() {
+
+    // Prevent duplicate simultaneous siren triggers.
+    if (
+        isRedAlertActive
+        ||
+        alertTriggerInFlight
+    ) {
+        return;
+    }
+
+    alertTriggerInFlight = true;
+
     try {
-        const response = await fetch("/api/alert/trigger", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                message: "EMERGENCY COMMAND INITIATED: ALL 8 MINE SIRENS ACTIVATED. CRITICAL SUBSIDENCE COLLAPSE HAZARD DETECTED. IMMEDIATE EVACUATION ORDER FOR PANEL EAST & UNDERGROUND WORKINGS."
-            })
-        });
-        const data = await response.json();
+
+        const response =
+            await fetch(
+                "/api/alert/trigger",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        message:
+                            "EMERGENCY COMMAND INITIATED: ALL 8 MINE SIRENS ACTIVATED. " +
+                            "CRITICAL SUBSIDENCE COLLAPSE HAZARD DETECTED. " +
+                            "IMMEDIATE EVACUATION ORDER FOR PANEL EAST & UNDERGROUND WORKINGS."
+                    })
+                }
+            );
+
+        const data =
+            await response.json();
+
         if (data.alert_state) {
-            enterRedAlertUI(data.alert_state);
+
+            enterRedAlertUI(
+                data.alert_state
+            );
+
         }
-    } catch (err) {
-        console.error("Failed to trigger emergency alert:", err);
-        enterRedAlertUI({
-            triggered_at: new Date().toISOString(),
-            message: "EMERGENCY COMMAND INITIATED: ALL 8 MINE SIRENS ACTIVATED. IMMEDIATE EVACUATION ORDER IN EFFECT."
-        });
+
+    }
+    catch (err) {
+
+        console.error(
+            "Failed to trigger emergency alert:",
+            err
+        );
+
+    }
+    finally {
+
+        alertTriggerInFlight = false;
+
     }
 }
-
 // Acknowledge & reset alert via API
 async function acknowledgeEmergencyAlert() {
+
     try {
-        const response = await fetch("/api/alert/reset", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" }
-        });
-        const data = await response.json();
+
+        const response =
+            await fetch(
+                "/api/demo/reset",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    }
+                }
+            );
+
+        const data =
+            await response.json();
+
+
+        if (!response.ok) {
+
+            console.error(
+                "Demo reset failed:",
+                data
+            );
+
+            return;
+        }
+
+
+        // ====================================================
+        // STOP CURRENT SIREN
+        // ====================================================
+
         exitRedAlertUI();
-    } catch (err) {
-        console.error("Failed to reset emergency alert:", err);
-        exitRedAlertUI();
+
+
+        // ====================================================
+        // IMPORTANT:
+        // DO NOT immediately re-arm the anomaly detector.
+        //
+        // The physical nodes may still be sitting in their
+        // anomalous positions.
+        // ====================================================
+
+        autoSirenNeedsNormalization = true;
+
+        autoAnomalyLatched = true;
+
+        normalPollStreak = 0;
+
+        alertTriggerInFlight = false;
+
+
+        // Remove OLD current-session readings from browser state.
+        //
+        // SQLite history is NOT touched.
+        latestReadings = {};
+
+
+        console.log(
+            "[TerraVeil] Alert acknowledged."
+        );
+
+        console.log(
+            "[TerraVeil] Automatic siren LOCKED until all physical nodes normalize."
+        );
+
+    }
+    catch (error) {
+
+        console.error(
+            "Failed to reset TerraVeil demo:",
+            error
+        );
+
     }
 }
-
 // Wire up event listeners
 const alertTriggerBtn = document.getElementById("btn-trigger-alert");
 if (alertTriggerBtn) {
@@ -1515,22 +1629,204 @@ async function pollDataPipeline() {
             ` · Received: ${system.usb?.received ?? 0} · Live updates: ${system.usb?.applied ?? 0} · Duplicates: ${system.usb?.duplicates ?? 0} · Historical: ${system.usb?.historical ?? 0} · Latest received sequence: ${system.usb?.last_sequence ?? 'UNAVAILABLE'} · ${system.usb?.last_result || system.usb?.last_error || 'Waiting for telemetry'}`;
         nodesList = registered;
         latestReadings = Object.fromEntries(readingsData.map(r => [r.node_id,r]));
-        const liveAnomalyDetected = readingsData.some(
-            reading =>
-                reading?.online === true &&
-                Number(reading?.anomaly) === 1
+// ============================================================
+// AUTOMATIC SIREN STATE MACHINE
+// ============================================================
+
+
+// ------------------------------------------------------------
+// Is ANY fresh physical node currently anomalous?
+// ------------------------------------------------------------
+
+const liveAnomalyDetected =
+    readingsData.some(
+        reading =>
+            reading?.online === true
+            &&
+            Number(reading?.anomaly) === 1
+    );
+
+
+// ------------------------------------------------------------
+// Have ALL registered REAL nodes supplied fresh readings?
+//
+// After /api/demo/reset a new node session is created.
+// Until a fresh packet arrives for that new session,
+// that node won't satisfy this check.
+// ------------------------------------------------------------
+
+const allNodesFresh =
+    currentMode === "REAL"
+    &&
+    registered.length > 0
+    &&
+    registered.every(
+        node =>
+        {
+            const reading =
+                latestReadings[
+                    node.node_id
+                ];
+
+            return (
+                reading
+                &&
+                reading.online === true
+            );
+        }
+    );
+
+
+// ------------------------------------------------------------
+// Are ALL fresh nodes currently NORMAL?
+// ------------------------------------------------------------
+
+const allNodesNormal =
+    allNodesFresh
+    &&
+    registered.every(
+        node =>
+        {
+            const reading =
+                latestReadings[
+                    node.node_id
+                ];
+
+            return (
+                reading
+                &&
+                Number(reading.anomaly) === 0
+            );
+        }
+    );
+
+
+// ============================================================
+// AFTER ACKNOWLEDGEMENT:
+// WAIT FOR PHYSICAL NORMALIZATION
+// ============================================================
+
+if (autoSirenNeedsNormalization) {
+
+    if (allNodesNormal) {
+
+        normalPollStreak++;
+
+        console.log(
+            `[TerraVeil] Normalization ${normalPollStreak}/${NORMAL_POLLS_REQUIRED}`
         );
 
-        if (liveAnomalyDetected && !autoAnomalyLatched) {
 
-            autoAnomalyLatched = true;
+        // Require TWO consecutive clean polls.
+        //
+        // Since the dashboard polls every ~2 seconds,
+        // this gives roughly 4 seconds of confirmed
+        // normal telemetry before another demo event.
+        if (
+            normalPollStreak
+            >=
+            NORMAL_POLLS_REQUIRED
+        ) {
 
-            if (!isRedAlertActive) {
-                document
-                    .getElementById("btn-trigger-alert")
-                    ?.click();
-            }
+            autoSirenNeedsNormalization =
+                false;
+
+            autoAnomalyLatched =
+                false;
+
+            normalPollStreak =
+                0;
+
+
+            console.log(
+                "[TerraVeil] All nodes NORMAL."
+            );
+
+            console.log(
+                "[TerraVeil] Automatic siren RE-ARMED."
+            );
+
         }
+
+    }
+    else {
+
+        // Any anomalous/offline/not-yet-refreshed node
+        // resets the normalization counter.
+
+        normalPollStreak = 0;
+
+    }
+
+}
+
+
+// ============================================================
+// NORMAL ARMED OPERATION
+// ============================================================
+
+else {
+
+    // --------------------------------------------------------
+    // NEW anomaly edge
+    // --------------------------------------------------------
+
+    if (
+        liveAnomalyDetected
+        &&
+        !autoAnomalyLatched
+    ) {
+
+        // Latch FIRST.
+        //
+        // Important: do this BEFORE the asynchronous
+        // alert request starts.
+        autoAnomalyLatched =
+            true;
+
+
+        console.log(
+            "[TerraVeil] NEW anomaly detected."
+        );
+
+        console.log(
+            "[TerraVeil] Triggering siren ONCE."
+        );
+
+
+        if (
+            !isRedAlertActive
+            &&
+            !alertTriggerInFlight
+        ) {
+
+            document
+                .getElementById(
+                    "btn-trigger-alert"
+                )
+                ?.click();
+
+        }
+
+    }
+
+
+    // --------------------------------------------------------
+    // Once the anomaly disappears naturally, re-arm for
+    // another future event.
+    //
+    // This applies during ordinary operation.
+    // ACK uses the stricter normalization process above.
+    // --------------------------------------------------------
+
+    if (!liveAnomalyDetected) {
+
+        autoAnomalyLatched =
+            false;
+
+    }
+
+}
 
         if (!liveAnomalyDetected) {
             autoAnomalyLatched = false;

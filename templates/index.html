@@ -22,6 +22,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/insar.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/insar-zones.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/node-placement.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/node-orientation.css') }}">
     <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -833,5 +834,6 @@
 <script type="module" src="{{ url_for('static', filename='js/insar.js') }}"></script>
 <script src="{{ url_for('static', filename='js/insar-zones.js') }}"></script>
 <script src="{{ url_for('static', filename='js/node-placement.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/node-orientation.js') }}"></script>
 </body>
 </html>

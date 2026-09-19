@@ -139,13 +139,29 @@ class ReceiverParser:
                 "_transport": "HUB_DATA",
             }
 
+            # Complete MPU6050 payload shared by UG and LD nodes.
+            # The hub already emits these fields; preserve them all the way
+            # through ingestion so the dashboard can render true live orientation
+            # and expose the complete radio packet.
+            for source_key, payload_key in (
+                ("ROLL", "roll"),
+                ("PITCH", "pitch"),
+                ("YAW", "yaw"),
+                ("AX", "ax"),
+                ("AY", "ay"),
+                ("AZ", "az"),
+                ("GX", "gx"),
+                ("GY", "gy"),
+                ("GZ", "gz"),
+            ):
+                if source_key in fields:
+                    payload[payload_key] = self._finite_float(fields[source_key])
+
             if node_type == "UG":
                 vibration = self._finite_float(fields["VIBRATION"])
                 if vibration not in (0.0, 1.0):
                     return None
                 payload.update(
-                    roll=self._finite_float(fields["ROLL"]),
-                    pitch=self._finite_float(fields["PITCH"]),
                     vibration=int(vibration),
                     soil=self._finite_float(fields["SOIL_ADC"]),
                 )
@@ -154,10 +170,6 @@ class ReceiverParser:
                     displacement_mm=self._finite_float(fields["DISP_MM"]),
                     potentiometer_raw=self._finite_float(fields["POT_ADC"]),
                 )
-                if "ROLL" in fields:
-                    payload["roll"] = self._finite_float(fields["ROLL"])
-                if "PITCH" in fields:
-                    payload["pitch"] = self._finite_float(fields["PITCH"])
 
             return payload, False
         except (KeyError, ValueError, TypeError):

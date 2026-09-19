@@ -47,8 +47,8 @@ const char* NODE_ID = "UG-01";
 // -------------------------
 // HOST-01 owns the channel. This node transmits ONLY after receiving
 // POLL,UG-01. This removes same-channel packet collisions between nodes.
-const unsigned long ACK_TIMEOUT_MS = 1500;
-const unsigned long POLL_TURNAROUND_MS = 20;
+const unsigned long ACK_TIMEOUT_MS = 600;
+const unsigned long POLL_TURNAROUND_MS = 12;
 
 // -------------------------
 // MPU6050 calibration
@@ -495,7 +495,7 @@ bool sendTelemetry(
             }
         }
 
-        delay(2);
+        delay(1);
     }
 
     Serial.println("[ACK] Timeout");
@@ -773,5 +773,5 @@ void loop()
         }
     }
 
-    delay(5);
+    delay(1);
 }

@@ -1629,6 +1629,21 @@ async function pollDataPipeline() {
             ` · Received: ${system.usb?.received ?? 0} · Live updates: ${system.usb?.applied ?? 0} · Duplicates: ${system.usb?.duplicates ?? 0} · Historical: ${system.usb?.historical ?? 0} · Latest received sequence: ${system.usb?.last_sequence ?? 'UNAVAILABLE'} · ${system.usb?.last_result || system.usb?.last_error || 'Waiting for telemetry'}`;
         nodesList = registered;
         latestReadings = Object.fromEntries(readingsData.map(r => [r.node_id,r]));
+
+        // Publish the same authoritative /api/live snapshot for local modules.
+        // node-orientation.js consumes this without creating another HTTP poll.
+        const telemetrySnapshot = {
+            mode: currentMode,
+            nodes: nodesList,
+            readings: latestReadings,
+            system,
+            receivedAt: Date.now()
+        };
+        window.TerraVeilTelemetry = telemetrySnapshot;
+        window.dispatchEvent(new CustomEvent(
+            'terraveil:telemetry',
+            {detail: telemetrySnapshot}
+        ));
 // ============================================================
 // AUTOMATIC SIREN STATE MACHINE
 // ============================================================
@@ -1837,7 +1852,7 @@ else {
         document.getElementById('kpi-active-nodes').textContent = `${readingsData.filter(r=>r.online).length} / ${nodesList.length}`;
         document.getElementById('kpi-active-status').textContent = `${readingsData.filter(r=>r.online).length} ONLINE`;
         document.getElementById('kpi-system-health').textContent = system.mother_host;
-        document.getElementById('kpi-sync-sec').textContent = '2s';
+        document.getElementById('kpi-sync-sec').textContent = '1s';
         const totalReadingsStored = system.readings_count;
         populateHistoricalDropdowns();
 
@@ -2013,7 +2028,7 @@ document.getElementById('hardware-mode').addEventListener('change', async event 
     await pollDataPipeline();
 });
 pollDataPipeline();
-setInterval(pollDataPipeline, 2000);
+setInterval(pollDataPipeline, 1000);
 
 async function startNodeSession(nodeId) {
     if (!confirm(`Confirm ${nodeId} has physically restarted and previous buffered packets have been drained. Begin a new sequence session? Existing history will be kept.`)) return;

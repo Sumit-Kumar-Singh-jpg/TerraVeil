@@ -56,12 +56,12 @@
 const unsigned long HEALTH_PRINT_INTERVAL_MS = 30000UL;
 const unsigned long NODE_OFFLINE_AFTER_MS     = 15000UL;
 
-// One complete acquisition round begins every 5 seconds while the
+// Fast/stable target: one complete acquisition round per second while the
 // network is healthy. Only one field node is allowed to answer at a time.
-const unsigned long POLLING_ROUND_INTERVAL_MS = 5000UL;
-const unsigned long POLL_RESPONSE_TIMEOUT_MS  = 1200UL;
-const unsigned long INTER_POLL_GUARD_MS       = 80UL;
-const unsigned long RETRY_GUARD_MS            = 150UL;
+const unsigned long POLLING_ROUND_INTERVAL_MS = 1000UL;
+const unsigned long POLL_RESPONSE_TIMEOUT_MS  = 750UL;
+const unsigned long INTER_POLL_GUARD_MS       = 25UL;
+const unsigned long RETRY_GUARD_MS            = 75UL;
 
 const size_t MAX_PACKET_LENGTH = 255;
 const size_t MAX_CSV_FIELDS    = 20;
@@ -1119,7 +1119,7 @@ void handleIncomingPacket(int packetSize)
 
     // --------------------------------------------------------
     // ACK FIRST.
-    // The field nodes wait only 1500 ms, so acknowledge the
+    // The field nodes wait only 600 ms, so acknowledge the
     // validated packet before doing verbose serial printing.
     // --------------------------------------------------------
 
@@ -1259,7 +1259,7 @@ bool pollNode(
             }
         }
 
-        delay(2);
+        delay(1);
     }
 
     pollTimeouts++;
@@ -1428,7 +1428,7 @@ void loop()
     unsigned long now =
         millis();
 
-    // Start immediately on boot, then approximately every 5 seconds.
+    // Start immediately on boot, then approximately every 1 second.
     if (
         lastPollingRoundStart == 0
         ||
@@ -1466,5 +1466,5 @@ void loop()
 
     printNetworkHealth();
 
-    delay(2);
+    delay(1);
 }

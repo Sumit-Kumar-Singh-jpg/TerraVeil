@@ -33,7 +33,7 @@ const char* NODE_ID = "LD-01";
 
 #define POT_PIN 34
 
-const int ADC_SAMPLES = 20;
+const int ADC_SAMPLES = 10;
 
 
 // ------------------------------------------------------------
@@ -84,8 +84,8 @@ float gyroZBias = 0.0f;
 // ============================================================
 
 // HOST-01 owns the channel. LD-01 transmits ONLY after POLL,LD-01.
-const unsigned long ACK_TIMEOUT_MS      = 1500;
-const unsigned long POLL_TURNAROUND_MS  = 20;
+const unsigned long ACK_TIMEOUT_MS      = 600;
+const unsigned long POLL_TURNAROUND_MS  = 12;
 
 
 // ============================================================
@@ -658,7 +658,7 @@ int readPotentiometer()
             );
 
 
-        delay(2);
+        delay(1);
     }
 
 
@@ -916,7 +916,7 @@ bool sendTelemetry(
             }
         }
 
-        delay(2);
+        delay(1);
     }
 
     Serial.println(
@@ -1500,5 +1500,5 @@ void loop()
         }
     }
 
-    delay(5);
+    delay(1);
 }

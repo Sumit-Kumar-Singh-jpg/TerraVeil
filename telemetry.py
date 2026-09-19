@@ -77,9 +77,36 @@ def _real_common_fields(payload, node, row):
     )
 
 
+def _real_mpu_fields(payload, row):
+    """Persist the complete MPU6050 payload when supplied by HOST-01.
+
+    Roll/pitch remain the safety-engine tilt inputs. The additional orientation,
+    acceleration and gyro values are stored for live visualization/diagnostics
+    and do not change the existing risk decision path.
+    """
+    limits = {
+        "roll": (-180, 180),
+        "pitch": (-180, 180),
+        "yaw": (-180, 180),
+        # Wider than the configured +-2 g / +-250 dps ranges so brief numerical
+        # overshoot or future MPU range changes do not discard a valid packet.
+        "ax": (-16, 16),
+        "ay": (-16, 16),
+        "az": (-16, 16),
+        "gx": (-2000, 2000),
+        "gy": (-2000, 2000),
+        "gz": (-2000, 2000),
+    }
+    for key, (low, high) in limits.items():
+        if key in payload:
+            row[key] = number(payload, key, low, high)
+
+
 def _real_underground_fields(payload, row):
     row["roll"] = number(payload, "roll", -180, 180)
     row["pitch"] = number(payload, "pitch", -180, 180)
+    _real_mpu_fields(payload, row)
+
     row["vibration"] = number(payload, "vibration", 0, 1)
     row["soil"] = number(payload, "soil", 0, 4095)
 
@@ -93,11 +120,7 @@ def _real_underground_fields(payload, row):
 def _real_displacement_fields(payload, row):
     row["displacement_mm"] = number(payload, "displacement_mm", 0, 10000)
     row["potentiometer_raw"] = number(payload, "potentiometer_raw", 0, 4095)
-
-    if "roll" in payload:
-        row["roll"] = number(payload, "roll", -180, 180)
-    if "pitch" in payload:
-        row["pitch"] = number(payload, "pitch", -180, 180)
+    _real_mpu_fields(payload, row)
 
 
 def _previous_is_stale(previous, now):

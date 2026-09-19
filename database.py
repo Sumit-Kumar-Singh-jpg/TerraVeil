@@ -133,6 +133,11 @@ def init_db():
         "queue_age_ms": "INTEGER",
         "anomaly": "INTEGER",
         "persistent": "INTEGER",
+        "baseline_ready": "INTEGER",
+        "baseline_samples": "INTEGER",
+        "roll_delta": "REAL",
+        "pitch_delta": "REAL",
+        "displacement_delta_mm": "REAL",
         "evidence": "TEXT",
         "processed": "INTEGER NOT NULL DEFAULT 1",
     }
@@ -171,6 +176,11 @@ def init_db():
         conn.execute(
             "ALTER TABLE hardware_nodes "
             "ADD COLUMN session_id TEXT NOT NULL DEFAULT 'legacy'"
+        )
+    if "relative_baseline" not in hardware_columns:
+        conn.execute(
+            "ALTER TABLE hardware_nodes "
+            "ADD COLUMN relative_baseline INTEGER NOT NULL DEFAULT 0"
         )
 
     for node_id, node_type, host_id, zone_id in HARDWARE_NODES:
@@ -312,13 +322,19 @@ def get_recent_events(source=None, limit=30):
 
 
 def start_node_session(node_id):
-    """Explicit operator-confirmed node restart; never inferred from packet order."""
+    """Start a fresh REAL monitoring epoch without deleting historical readings.
+
+    A new session also enables Stage-3 baseline-relative risk processing.
+    The first few packets in that session establish the current resting pose.
+    """
     from uuid import uuid4
 
     session_id = uuid4().hex
     with get_connection() as conn:
         result = conn.execute(
-            "UPDATE hardware_nodes SET session_id=? WHERE node_id=?",
+            "UPDATE hardware_nodes "
+            "SET session_id=?, relative_baseline=1 "
+            "WHERE node_id=?",
             (session_id, node_id),
         )
         if result.rowcount != 1:

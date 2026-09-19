@@ -31,11 +31,17 @@ app.config["MAX_CONTENT_LENGTH"] = 8192
 init_db()
 
 from telemetry import ingest, network_state
+from stage3_risk import BASELINE_SAMPLES
 
 # Global Alert & Siren State
 alert_state = {
-    "status": "NORMAL",             # "NORMAL" or "RED_ALERT"
+    "status": "NORMAL",             # NORMAL / EARLY_WARNING / RED_ALERT
     "sirens_active": False,
+    "alert_kind": None,
+    "demo_armed": False,
+    "collapse_latched": False,
+    "baseline_samples_required": BASELINE_SAMPLES,
+    "geophone_event": None,
     "triggered_at": None,
     "acknowledged_at": None,
     "message": "Normal operations in progress. All sirens in standby mode.",
@@ -57,60 +63,158 @@ def index():
     return render_template("index.html")
 
 @app.route("/api/demo/reset", methods=["POST"])
+@app.route("/api/demo/baseline", methods=["POST"])
 def demo_reset():
+    """Set the current physical pose as a new monitoring zero."""
     global alert_state
 
     if mode() != "REAL":
         return jsonify(
             success=False,
-            error="Demo reset is only available in REAL HARDWARE mode"
+            error="Baseline reset is only available in REAL HARDWARE mode"
         ), 400
-
-    # --------------------------------------------------------
-    # 1. Reset siren / emergency state
-    # --------------------------------------------------------
 
     alert_state["status"] = "NORMAL"
     alert_state["sirens_active"] = False
+    alert_state["alert_kind"] = None
     alert_state["triggered_at"] = None
     alert_state["acknowledged_at"] = datetime.utcnow().isoformat()
     alert_state["message"] = (
-        "Demo reset complete. Waiting for fresh physical telemetry."
+        "New demo baseline started. Keep all physical nodes still "
+        f"for {BASELINE_SAMPLES} fresh packets."
     )
+    alert_state["demo_armed"] = True
+    alert_state["collapse_latched"] = False
+    alert_state["geophone_event"] = None
 
     for siren in alert_state["siren_zones"]:
         siren["status"] = "OFF"
 
-    # --------------------------------------------------------
-    # 2. Begin a fresh LIVE monitoring epoch for every node
-    #
-    # IMPORTANT:
-    # This DOES NOT delete readings.
-    # Previous readings remain available in SQLite/history.
-    # --------------------------------------------------------
-
     sessions = {}
-
     for node in get_nodes("REAL"):
-        node_id = node["node_id"]
-
-        sessions[node_id] = start_node_session(
-            node_id
-        )
+        sessions[node["node_id"]] = start_node_session(node["node_id"])
 
     return jsonify(
         success=True,
-        message="Demo reset complete",
-        sessions=sessions
+        message=(
+            "SET ZERO accepted. SQLite history preserved; "
+            "fresh baseline capture started."
+        ),
+        baseline_samples_required=BASELINE_SAMPLES,
+        sessions=sessions,
+        alert_state=alert_state,
     )
-    
+
+
+def _demo_baselines_ready():
+    nodes = get_nodes("REAL")
+    readings = {
+        row["node_id"]: row
+        for row in get_latest_readings("REAL")
+    }
+
+    return (
+        bool(nodes)
+        and len(readings) == len(nodes)
+        and all(
+            int(
+                readings.get(node["node_id"], {}).get("baseline_ready")
+                or 0
+            ) == 1
+            for node in nodes
+        )
+    )
+
+
+@app.route("/api/demo/seismic", methods=["POST"])
+def simulate_geophone_precursor():
+    """Explicitly simulated four-geophone precursor for the SIH demo."""
+    global alert_state
+
+    if mode() != "REAL":
+        return jsonify(
+            success=False,
+            error="Geophone demo is only available in REAL HARDWARE mode"
+        ), 400
+
+    if not alert_state.get("demo_armed"):
+        return jsonify(
+            success=False,
+            error="Press SET ZERO / ARM DEMO before running the precursor."
+        ), 409
+
+    if not _demo_baselines_ready():
+        return jsonify(
+            success=False,
+            error="Baseline capture is not complete for all physical nodes yet."
+        ), 409
+
+    origin_time = datetime.utcnow().isoformat()
+    geophone_event = {
+        "simulated": True,
+        "sensor_count": 4,
+        "x_cm": 30.0,
+        "y_cm": 20.0,
+        "z_cm": 14.0,
+        "origin_time": origin_time,
+        "arrival_ms": {
+            "GEO-01": 11.8,
+            "GEO-02": 12.6,
+            "GEO-03": 13.1,
+            "GEO-04": 12.2,
+        },
+        "label": "SIMULATED 4-GEOPHONE LOCALIZATION — DEMO ONLY",
+    }
+
+    alert_state.update(
+        status="EARLY_WARNING",
+        sirens_active=True,
+        alert_kind="SIMULATED_GEOPHONE",
+        triggered_at=origin_time,
+        acknowledged_at=None,
+        message=(
+            "EARLY WARNING: simulated microseismic precursor localized "
+            "near the subsurface void. No physical node deformation is "
+            "required for this first-stage warning."
+        ),
+        geophone_event=geophone_event,
+    )
+
+    for siren in alert_state["siren_zones"]:
+        siren["status"] = "ON"
+
+    return jsonify(
+        success=True,
+        message="Simulated geophone precursor issued.",
+        alert_state=alert_state,
+    )
+
+
 def accept_telemetry(payload):
     result = ingest(payload)
-    if result.get('applied') and result.get('risk_level') == 'CRITICAL' and mode() == 'REAL':
-        alert_state.update(status='RED_ALERT', sirens_active=True,
-            triggered_at=datetime.utcnow().isoformat(), message='Validated persistent correlated critical sensor event')
-        for siren in alert_state['siren_zones']:
-            siren['status'] = 'ON'
+
+    if (
+        result.get("applied")
+        and result.get("risk_level") == "CRITICAL"
+        and mode() == "REAL"
+        and alert_state.get("demo_armed")
+        and not alert_state.get("collapse_latched")
+    ):
+        alert_state.update(
+            status="RED_ALERT",
+            sirens_active=True,
+            alert_kind="PHYSICAL_DEFORMATION",
+            collapse_latched=True,
+            triggered_at=datetime.utcnow().isoformat(),
+            message=(
+                "CRITICAL PHYSICAL DEFORMATION: persistent "
+                "baseline-relative movement confirmed by TerraVeil "
+                "local nodes. Immediate evacuation / inspection response."
+            ),
+        )
+        for siren in alert_state["siren_zones"]:
+            siren["status"] = "ON"
+
     return result
 
 
@@ -219,6 +323,8 @@ def trigger_alert():
     
     alert_state["status"] = "RED_ALERT"
     alert_state["sirens_active"] = True
+    alert_state["alert_kind"] = "MANUAL_EMERGENCY"
+    alert_state["collapse_latched"] = True
     alert_state["triggered_at"] = datetime.utcnow().isoformat()
     alert_state["message"] = custom_msg
     for s in alert_state["siren_zones"]:
@@ -233,18 +339,32 @@ def trigger_alert():
 
 @app.route("/api/alert/reset", methods=["POST"])
 def reset_alert():
+    """Acknowledge/silence the current alert WITHOUT changing baselines."""
     global alert_state
+
+    previous_status = alert_state.get("status")
+
     alert_state["status"] = "NORMAL"
     alert_state["sirens_active"] = False
     alert_state["acknowledged_at"] = datetime.utcnow().isoformat()
-    alert_state["message"] = "Alert acknowledged and reset. All sirens silenced. Resuming normal monitoring."
-    for s in alert_state["siren_zones"]:
-        s["status"] = "OFF"
-        
+    alert_state["message"] = (
+        "Alert acknowledged. Sirens silenced. Monitoring baseline unchanged."
+    )
+    alert_state["alert_kind"] = None
+    alert_state["geophone_event"] = None
+
+    # Early warning ACK keeps the collapse stage armed.
+    # Red alert ACK latches/disarms this completed demo cycle.
+    if previous_status == "RED_ALERT":
+        alert_state["demo_armed"] = False
+
+    for siren in alert_state["siren_zones"]:
+        siren["status"] = "OFF"
+
     return jsonify({
         "success": True,
-        "message": "Alert acknowledged. Sirens deactivated. System returned to NORMAL state.",
-        "alert_state": alert_state
+        "message": "Alert acknowledged. No session or baseline was changed.",
+        "alert_state": alert_state,
     })
 
 

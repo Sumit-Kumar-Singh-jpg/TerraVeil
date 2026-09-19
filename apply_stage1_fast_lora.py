@@ -228,5 +228,3 @@ print("  2. Flash main_hub.cpp first.")
 print("  3. Flash UG-01, UG-02, then LD-01.")
 print("  4. Confirm one fresh packet per node per ~1 second.")
 print("  5. Watch ACK timeouts / poll timeouts for 2-3 minutes.")
-
-

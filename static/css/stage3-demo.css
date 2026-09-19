@@ -1,0 +1,181 @@
+/* TerraVeil Stage 3 demo controls and simulated geophone warning */
+
+.stage3-demo-bar {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(280px, 1fr);
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.stage3-mode-control { font-size: 11px; }
+
+.stage3-mode-control label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.stage3-control-btn {
+    min-height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: 700 9px/1 "JetBrains Mono", monospace;
+    letter-spacing: .06em;
+}
+
+.stage3-control-btn.zero { border-color: rgba(59, 130, 246, .45); }
+.stage3-control-btn.seismic { border-color: rgba(245, 158, 11, .5); }
+
+.stage3-control-btn:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.stage3-baseline-status {
+    min-width: 0;
+    padding: 7px 9px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text-muted);
+    font: 600 9px/1.35 "JetBrains Mono", monospace;
+}
+
+.stage3-baseline-status.armed {
+    color: #34d399;
+    border-color: rgba(16, 185, 129, .4);
+    background: rgba(16, 185, 129, .08);
+}
+
+.stage3-baseline-status.disarmed {
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, .38);
+}
+
+.stage3-hardware-health {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    font-size: 9px;
+}
+
+.stage3-early-warning {
+    position: fixed;
+    inset: 0;
+    z-index: 13000;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+}
+
+.stage3-early-warning.hidden { display: none; }
+
+.stage3-early-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(22, 14, 2, .78);
+    backdrop-filter: blur(6px);
+}
+
+.stage3-early-card {
+    position: relative;
+    width: min(720px, 96vw);
+    padding: 28px;
+    border: 1px solid rgba(245, 158, 11, .55);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(55, 34, 5, .98), rgba(25, 20, 13, .98));
+    box-shadow: 0 28px 100px rgba(0, 0, 0, .58);
+}
+
+.stage3-early-kicker {
+    margin-bottom: 7px;
+    color: #fbbf24;
+    font: 800 9px/1.25 "JetBrains Mono", monospace;
+    letter-spacing: .12em;
+}
+
+.stage3-early-card h2 {
+    margin: 0 0 10px;
+    color: #fde68a;
+    font-size: 25px;
+}
+
+.stage3-early-card p {
+    color: #f8fafc;
+    line-height: 1.55;
+}
+
+.stage3-localization-grid,
+.stage3-arrivals {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+.stage3-localization-grid { margin: 18px 0 10px; }
+.stage3-arrivals { margin-bottom: 14px; }
+
+.stage3-localization-grid > div,
+.stage3-arrivals > div {
+    padding: 10px;
+    border: 1px solid rgba(245, 158, 11, .22);
+    border-radius: 7px;
+    background: rgba(0, 0, 0, .16);
+}
+
+.stage3-localization-grid span,
+.stage3-arrivals span {
+    display: block;
+    margin-bottom: 5px;
+    color: #d6a84a;
+    font: 700 8px/1 "JetBrains Mono", monospace;
+}
+
+.stage3-localization-grid strong,
+.stage3-arrivals strong {
+    color: #fff7d6;
+    font: 700 13px/1.2 "JetBrains Mono", monospace;
+}
+
+.stage3-early-note {
+    padding: 10px 12px;
+    border-left: 3px solid #f59e0b;
+    background: rgba(245, 158, 11, .08);
+    color: #f1d59a;
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+.stage3-early-ack {
+    width: 100%;
+    min-height: 42px;
+    margin-top: 18px;
+    border: 1px solid #f59e0b;
+    border-radius: 7px;
+    background: #b56b08;
+    color: #fff;
+    cursor: pointer;
+    font: 800 10px/1 "JetBrains Mono", monospace;
+    letter-spacing: .08em;
+}
+
+@media (max-width: 1050px) {
+    .stage3-demo-bar { grid-template-columns: 1fr 1fr; }
+    .stage3-baseline-status,
+    .stage3-hardware-health { grid-column: 1 / -1; }
+}
+
+@media (max-width: 620px) {
+    .stage3-demo-bar,
+    .stage3-localization-grid,
+    .stage3-arrivals { grid-template-columns: 1fr 1fr; }
+
+    .stage3-mode-control,
+    .stage3-baseline-status,
+    .stage3-hardware-health { grid-column: 1 / -1; }
+}

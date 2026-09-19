@@ -13,6 +13,7 @@ from uuid import uuid4
 from database import get_connection, get_nodes, get_latest_readings, mode
 from ml_model import calculate_risk
 from digital_twin import distance
+from stage3_risk import apply_stage3_risk
 
 
 def timeout_seconds():
@@ -289,156 +290,170 @@ def ingest(payload, source="REAL"):
         if source == "REAL" and previous and row["sequence"] < previous[0]["sequence"]:
             row["processed"] = 0
 
-        filtered = dict(row)
-        for field in ("tilt_x", "tilt_y", "displacement_mm"):
-            if field in row:
-                prior = [
-                    r[field]
-                    for r in previous[:2]
-                    if r.get(field) is not None
-                    and abs(
-                        (
-                            datetime.fromisoformat(row["timestamp"])
-                            - datetime.fromisoformat(r["timestamp"]).replace(tzinfo=timezone.utc)
-                        ).total_seconds()
-                    )
-                    <= timeout_seconds()
-                ]
-                filtered[field] = median([row[field], *prior])
+        relative_mode = (
+            source == "REAL"
+            and bool(node.get("relative_baseline"))
+        )
 
-        # ------------------------------------------------------------
-        # LD-01 displacement reference
-        # ------------------------------------------------------------
-        # A linear potentiometer reports an absolute shaft position. For
-        # subsidence monitoring we care about MOVEMENT away from the position
-        # observed at the beginning of the current node session. This also
-        # means LD-01 can power on at any point along its mechanical travel
-        # without being declared anomalous just because the absolute mm value
-        # is large.
-        ld_change_mm = 0.0
-        ld_baseline_mm = None
-
-        if node["node_type"] != "UnderGround":
-            baseline_row = conn.execute(
-                "SELECT displacement_mm FROM readings "
-                "WHERE node_id=? AND data_source=? AND session_id=? "
-                "AND processed=1 AND displacement_mm IS NOT NULL "
-                "ORDER BY id ASC LIMIT 1",
-                (node_id, source, row["session_id"]),
-            ).fetchone()
-
-            ld_baseline_mm = (
-                float(baseline_row["displacement_mm"])
-                if baseline_row is not None
-                else float(row["displacement_mm"])
-            )
-            ld_change_mm = abs(float(row["displacement_mm"]) - ld_baseline_mm)
-
-            # COPOD for LD-01 sees displacement CHANGE, not absolute position.
-            filtered["displacement_delta_mm"] = ld_change_mm
-
-        candidate, _ml_level = calculate_risk(node["node_type"], filtered)
-
-        row["ml_score"] = round(candidate, 2)
-        amplitude = math.hypot(row.get("tilt_x", 0), row.get("tilt_y", 0))
-
-        if node["node_type"] == "UnderGround":
-            # UG-01 / UG-02 behaviour remains unchanged.
-            abnormal = (
-                amplitude >= 0.8
-                or row.get("vibration", 0) >= 0.8
+        if relative_mode:
+            apply_stage3_risk(
+                conn,
+                node,
+                row,
+                previous,
+                registry,
             )
         else:
-            # LD-01: >= 1 mm movement from the current-session reference is
-            # physically meaningful enough for the prototype anomaly demo.
-            # COPOD must ALSO judge the movement as unusual.
-            abnormal = ld_change_mm >= 1.0
+            filtered = dict(row)
+            for field in ("tilt_x", "tilt_y", "displacement_mm"):
+                if field in row:
+                    prior = [
+                        r[field]
+                        for r in previous[:2]
+                        if r.get(field) is not None
+                        and abs(
+                            (
+                                datetime.fromisoformat(row["timestamp"])
+                                - datetime.fromisoformat(r["timestamp"]).replace(tzinfo=timezone.utc)
+                            ).total_seconds()
+                        )
+                        <= timeout_seconds()
+                    ]
+                    filtered[field] = median([row[field], *prior])
 
-        row["anomaly"] = int(abnormal and candidate >= 40)
+            # ------------------------------------------------------------
+            # LD-01 displacement reference
+            # ------------------------------------------------------------
+            # A linear potentiometer reports an absolute shaft position. For
+            # subsidence monitoring we care about MOVEMENT away from the position
+            # observed at the beginning of the current node session. This also
+            # means LD-01 can power on at any point along its mechanical travel
+            # without being declared anomalous just because the absolute mm value
+            # is large.
+            ld_change_mm = 0.0
+            ld_baseline_mm = None
 
-        recent = [
-            r
-            for r in previous
-            if abs(
-                (
-                    datetime.fromisoformat(row["timestamp"])
-                    - datetime.fromisoformat(r["timestamp"]).replace(tzinfo=timezone.utc)
-                ).total_seconds()
-            )
-            <= timeout_seconds()
-        ]
-        row["persistent"] = int(
-            row["anomaly"]
-            and len(recent) >= 2
-            and all(r["anomaly"] for r in recent[:2])
-        )
-
-        trend = bool(
-            recent
-            and (
-                amplitude
-                > math.hypot(
-                    recent[0].get("tilt_x") or 0,
-                    recent[0].get("tilt_y") or 0,
-                )
-                + 0.05
-                or row.get("displacement_mm", 0)
-                > (recent[0].get("displacement_mm") or 0) + 0.05
-            )
-        )
-
-        peers = []
-        if (
-            row["persistent"]
-            and node.get("latitude") is not None
-            and decorate(row | {"risk_level": "LOW"})["online"]
-        ):
-            for other in registry.values():
-                if (
-                    other["node_id"] == node_id
-                    or other.get("latitude") is None
-                    or distance(node, other) > 500
-                ):
-                    continue
-                rd = conn.execute(
-                    "SELECT * FROM readings WHERE data_source=? AND node_id=? "
-                    "AND session_id=? AND processed=1 ORDER BY id DESC LIMIT 1",
-                    (source, other["node_id"], other.get("session_id", "legacy")),
+            if node["node_type"] != "UnderGround":
+                baseline_row = conn.execute(
+                    "SELECT displacement_mm FROM readings "
+                    "WHERE node_id=? AND data_source=? AND session_id=? "
+                    "AND processed=1 AND displacement_mm IS NOT NULL "
+                    "ORDER BY id ASC LIMIT 1",
+                    (node_id, source, row["session_id"]),
                 ).fetchone()
-                if rd and rd["persistent"] and decorate(dict(rd))["online"]:
-                    peers.append(other["node_id"])
 
-        level = "MEDIUM" if row["anomaly"] else "LOW"
-        if row["persistent"] and peers:
-            level = "HIGH"
+                ld_baseline_mm = (
+                    float(baseline_row["displacement_mm"])
+                    if baseline_row is not None
+                    else float(row["displacement_mm"])
+                )
+                ld_change_mm = abs(float(row["displacement_mm"]) - ld_baseline_mm)
+
+                # COPOD for LD-01 sees displacement CHANGE, not absolute position.
+                filtered["displacement_delta_mm"] = ld_change_mm
+
+            candidate, _ml_level = calculate_risk(node["node_type"], filtered)
+
+            row["ml_score"] = round(candidate, 2)
+            amplitude = math.hypot(row.get("tilt_x", 0), row.get("tilt_y", 0))
+
+            if node["node_type"] == "UnderGround":
+                # UG-01 / UG-02 behaviour remains unchanged.
+                abnormal = (
+                    amplitude >= 0.8
+                    or row.get("vibration", 0) >= 0.8
+                )
+            else:
+                # LD-01: >= 1 mm movement from the current-session reference is
+                # physically meaningful enough for the prototype anomaly demo.
+                # COPOD must ALSO judge the movement as unusual.
+                abnormal = ld_change_mm >= 1.0
+
+            row["anomaly"] = int(abnormal and candidate >= 40)
+
+            recent = [
+                r
+                for r in previous
+                if abs(
+                    (
+                        datetime.fromisoformat(row["timestamp"])
+                        - datetime.fromisoformat(r["timestamp"]).replace(tzinfo=timezone.utc)
+                    ).total_seconds()
+                )
+                <= timeout_seconds()
+            ]
+            row["persistent"] = int(
+                row["anomaly"]
+                and len(recent) >= 2
+                and all(r["anomaly"] for r in recent[:2])
+            )
+
+            trend = bool(
+                recent
+                and (
+                    amplitude
+                    > math.hypot(
+                        recent[0].get("tilt_x") or 0,
+                        recent[0].get("tilt_y") or 0,
+                    )
+                    + 0.05
+                    or row.get("displacement_mm", 0)
+                    > (recent[0].get("displacement_mm") or 0) + 0.05
+                )
+            )
+
+            peers = []
             if (
-                trend
-                and row.get("vibration", 0) >= 1
-                and amplitude >= 5
-                and len(recent) >= 4
-                and all(r["persistent"] for r in recent[:3])
+                row["persistent"]
+                and node.get("latitude") is not None
+                and decorate(row | {"risk_level": "LOW"})["online"]
             ):
-                level = "CRITICAL"
+                for other in registry.values():
+                    if (
+                        other["node_id"] == node_id
+                        or other.get("latitude") is None
+                        or distance(node, other) > 500
+                    ):
+                        continue
+                    rd = conn.execute(
+                        "SELECT * FROM readings WHERE data_source=? AND node_id=? "
+                        "AND session_id=? AND processed=1 ORDER BY id DESC LIMIT 1",
+                        (source, other["node_id"], other.get("session_id", "legacy")),
+                    ).fetchone()
+                    if rd and rd["persistent"] and decorate(dict(rd))["online"]:
+                        peers.append(other["node_id"])
 
-        row["risk_level"] = level
-        row["risk_score"] = round(
-            min(candidate, {"LOW": 39, "MEDIUM": 69, "HIGH": 89, "CRITICAL": 100}[level]),
-            2,
-        )
-        if peers:
-            row["evidence"] = "SUBSIDENCE RISK: persistent correlated evidence"
-        elif row["anomaly"] and node["node_type"] != "UnderGround":
-            row["evidence"] = (
-                f"ANOMALY DETECTED: LD-01 displacement changed "
-                f"{ld_change_mm:.2f} mm from session baseline "
-                f"({ld_baseline_mm:.2f} mm); inspect and track persistence"
+            level = "MEDIUM" if row["anomaly"] else "LOW"
+            if row["persistent"] and peers:
+                level = "HIGH"
+                if (
+                    trend
+                    and row.get("vibration", 0) >= 1
+                    and amplitude >= 5
+                    and len(recent) >= 4
+                    and all(r["persistent"] for r in recent[:3])
+                ):
+                    level = "CRITICAL"
+
+            row["risk_level"] = level
+            row["risk_score"] = round(
+                min(candidate, {"LOW": 39, "MEDIUM": 69, "HIGH": 89, "CRITICAL": 100}[level]),
+                2,
             )
-        elif row["anomaly"]:
-            row["evidence"] = (
-                "ANOMALY DETECTED: unconfirmed; inspect and track persistence"
-            )
-        else:
-            row["evidence"] = "No anomaly detected in available sensors"
+            if peers:
+                row["evidence"] = "SUBSIDENCE RISK: persistent correlated evidence"
+            elif row["anomaly"] and node["node_type"] != "UnderGround":
+                row["evidence"] = (
+                    f"ANOMALY DETECTED: LD-01 displacement changed "
+                    f"{ld_change_mm:.2f} mm from session baseline "
+                    f"({ld_baseline_mm:.2f} mm); inspect and track persistence"
+                )
+            elif row["anomaly"]:
+                row["evidence"] = (
+                    "ANOMALY DETECTED: unconfirmed; inspect and track persistence"
+                )
+            else:
+                row["evidence"] = "No anomaly detected in available sensors"
 
         if not row["processed"]:
             row.update(

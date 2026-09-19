@@ -23,6 +23,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/insar-zones.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/node-placement.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/node-orientation.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/stage3-demo.css') }}">
     <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -182,7 +183,37 @@
         </header>
 
         <!-- KPI STRIP -->
-        <div style="padding:8px 16px"><label>Data source <select id="hardware-mode"><option value="REAL">REAL HARDWARE</option><option value="SIMULATION">SIMULATION</option></select></label><div id="hardware-health" role="status">Connecting to Mother Host…</div></div>
+        <div class="stage3-demo-bar">
+            <div class="stage3-mode-control">
+                <label>
+                    Data source
+                    <select id="hardware-mode">
+                        <option value="REAL">REAL HARDWARE</option>
+                        <option value="SIMULATION">SIMULATION</option>
+                    </select>
+                </label>
+            </div>
+
+            <button type="button" id="btn-stage3-zero"
+                    class="stage3-control-btn zero">
+                SET ZERO / ARM DEMO
+            </button>
+
+            <button type="button" id="btn-stage3-geophone"
+                    class="stage3-control-btn seismic" disabled>
+                SIMULATE GEOPHONE PRECURSOR
+            </button>
+
+            <div id="stage3-baseline-status"
+                 class="stage3-baseline-status" role="status">
+                Demo engine: waiting for REAL hardware
+            </div>
+
+            <div id="hardware-health"
+                 class="stage3-hardware-health" role="status">
+                Connecting to Mother Host…
+            </div>
+        </div>
         <!-- =========================================================
             REAL HARDWARE CONNECTIVITY STRIP
             Only shown when REAL HARDWARE mode is active
@@ -830,6 +861,7 @@
 
 <!-- Application Control Logic -->
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/demo-controls.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/digital-twin.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/insar.js') }}"></script>
 <script src="{{ url_for('static', filename='js/insar-zones.js') }}"></script>

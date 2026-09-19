@@ -1501,81 +1501,37 @@ async function triggerEmergencyAlert() {
 }
 // Acknowledge & reset alert via API
 async function acknowledgeEmergencyAlert() {
-
     try {
-
-        const response =
-            await fetch(
-                "/api/demo/reset",
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    }
+        const response = await fetch(
+            "/api/alert/reset",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
                 }
-            );
+            }
+        );
 
-        const data =
-            await response.json();
-
+        const data = await response.json();
 
         if (!response.ok) {
-
-            console.error(
-                "Demo reset failed:",
-                data
-            );
-
+            console.error("Alert acknowledgement failed:", data);
             return;
         }
 
-
-        // ====================================================
-        // STOP CURRENT SIREN
-        // ====================================================
-
+        // ACK only silences/latches. It never changes the operator-set zero.
         exitRedAlertUI();
-
-
-        // ====================================================
-        // IMPORTANT:
-        // DO NOT immediately re-arm the anomaly detector.
-        //
-        // The physical nodes may still be sitting in their
-        // anomalous positions.
-        // ====================================================
-
-        autoSirenNeedsNormalization = true;
-
-        autoAnomalyLatched = true;
-
-        normalPollStreak = 0;
-
         alertTriggerInFlight = false;
 
-
-        // Remove OLD current-session readings from browser state.
-        //
-        // SQLite history is NOT touched.
-        latestReadings = {};
-
-
         console.log(
-            "[TerraVeil] Alert acknowledged."
+            "[TerraVeil] Alert acknowledged. Baseline preserved."
         );
-
-        console.log(
-            "[TerraVeil] Automatic siren LOCKED until all physical nodes normalize."
-        );
-
     }
     catch (error) {
-
         console.error(
-            "Failed to reset TerraVeil demo:",
+            "Failed to acknowledge TerraVeil alert:",
             error
         );
-
     }
 }
 // Wire up event listeners
@@ -1645,207 +1601,10 @@ async function pollDataPipeline() {
             {detail: telemetrySnapshot}
         ));
 // ============================================================
-// AUTOMATIC SIREN STATE MACHINE
-// ============================================================
+        // STAGE 3 ALERT AUTHORITY
+        // Browser-side anomaly auto-clicking is disabled. The local Flask
+        // risk engine is the sole automatic authority for RED ALERT.
 
-
-// ------------------------------------------------------------
-// Is ANY fresh physical node currently anomalous?
-// ------------------------------------------------------------
-
-const liveAnomalyDetected =
-    readingsData.some(
-        reading =>
-            reading?.online === true
-            &&
-            Number(reading?.anomaly) === 1
-    );
-
-
-// ------------------------------------------------------------
-// Have ALL registered REAL nodes supplied fresh readings?
-//
-// After /api/demo/reset a new node session is created.
-// Until a fresh packet arrives for that new session,
-// that node won't satisfy this check.
-// ------------------------------------------------------------
-
-const allNodesFresh =
-    currentMode === "REAL"
-    &&
-    registered.length > 0
-    &&
-    registered.every(
-        node =>
-        {
-            const reading =
-                latestReadings[
-                    node.node_id
-                ];
-
-            return (
-                reading
-                &&
-                reading.online === true
-            );
-        }
-    );
-
-
-// ------------------------------------------------------------
-// Are ALL fresh nodes currently NORMAL?
-// ------------------------------------------------------------
-
-const allNodesNormal =
-    allNodesFresh
-    &&
-    registered.every(
-        node =>
-        {
-            const reading =
-                latestReadings[
-                    node.node_id
-                ];
-
-            return (
-                reading
-                &&
-                Number(reading.anomaly) === 0
-            );
-        }
-    );
-
-
-// ============================================================
-// AFTER ACKNOWLEDGEMENT:
-// WAIT FOR PHYSICAL NORMALIZATION
-// ============================================================
-
-if (autoSirenNeedsNormalization) {
-
-    if (allNodesNormal) {
-
-        normalPollStreak++;
-
-        console.log(
-            `[TerraVeil] Normalization ${normalPollStreak}/${NORMAL_POLLS_REQUIRED}`
-        );
-
-
-        // Require TWO consecutive clean polls.
-        //
-        // Since the dashboard polls every ~2 seconds,
-        // this gives roughly 4 seconds of confirmed
-        // normal telemetry before another demo event.
-        if (
-            normalPollStreak
-            >=
-            NORMAL_POLLS_REQUIRED
-        ) {
-
-            autoSirenNeedsNormalization =
-                false;
-
-            autoAnomalyLatched =
-                false;
-
-            normalPollStreak =
-                0;
-
-
-            console.log(
-                "[TerraVeil] All nodes NORMAL."
-            );
-
-            console.log(
-                "[TerraVeil] Automatic siren RE-ARMED."
-            );
-
-        }
-
-    }
-    else {
-
-        // Any anomalous/offline/not-yet-refreshed node
-        // resets the normalization counter.
-
-        normalPollStreak = 0;
-
-    }
-
-}
-
-
-// ============================================================
-// NORMAL ARMED OPERATION
-// ============================================================
-
-else {
-
-    // --------------------------------------------------------
-    // NEW anomaly edge
-    // --------------------------------------------------------
-
-    if (
-        liveAnomalyDetected
-        &&
-        !autoAnomalyLatched
-    ) {
-
-        // Latch FIRST.
-        //
-        // Important: do this BEFORE the asynchronous
-        // alert request starts.
-        autoAnomalyLatched =
-            true;
-
-
-        console.log(
-            "[TerraVeil] NEW anomaly detected."
-        );
-
-        console.log(
-            "[TerraVeil] Triggering siren ONCE."
-        );
-
-
-        if (
-            !isRedAlertActive
-            &&
-            !alertTriggerInFlight
-        ) {
-
-            document
-                .getElementById(
-                    "btn-trigger-alert"
-                )
-                ?.click();
-
-        }
-
-    }
-
-
-    // --------------------------------------------------------
-    // Once the anomaly disappears naturally, re-arm for
-    // another future event.
-    //
-    // This applies during ordinary operation.
-    // ACK uses the stricter normalization process above.
-    // --------------------------------------------------------
-
-    if (!liveAnomalyDetected) {
-
-        autoAnomalyLatched =
-            false;
-
-    }
-
-}
-
-        if (!liveAnomalyDetected) {
-            autoAnomalyLatched = false;
-        }
         updateHardwareConnectivity(system);
         window.backendZones = twin.zones;
         selectedNodeId ||= nodesList[0]?.node_id;

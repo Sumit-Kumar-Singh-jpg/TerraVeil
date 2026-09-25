@@ -31,17 +31,6 @@ def _as_aware(stamp):
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def _wrap_degrees(value):
-    """Normalize any valid calibrated MPU angle into [-180, 180].
-
-    The ESP32 firmware subtracts calibration offsets. Near the +/-180 boundary
-    that can temporarily produce values outside the conventional range even
-    though the physical attitude is valid. Store a normalized angle instead of
-    rejecting the packet and accidentally making a live node appear OFFLINE.
-    """
-    return ((float(value) + 180.0) % 360.0) - 180.0
-
-
 def decorate(row):
     stamp = row.get("last_seen") or row["timestamp"]
     seen = _as_aware(stamp)
@@ -97,9 +86,9 @@ def _real_mpu_fields(payload, row):
     and do not change the existing risk decision path.
     """
     limits = {
-        "roll": (-720, 720),
-        "pitch": (-720, 720),
-        "yaw": (-720, 720),
+        "roll": (-180, 180),
+        "pitch": (-180, 180),
+        "yaw": (-180, 180),
         # Wider than the configured +-2 g / +-250 dps ranges so brief numerical
         # overshoot or future MPU range changes do not discard a valid packet.
         "ax": (-16, 16),
@@ -111,13 +100,12 @@ def _real_mpu_fields(payload, row):
     }
     for key, (low, high) in limits.items():
         if key in payload:
-            value = number(payload, key, low, high)
-            row[key] = _wrap_degrees(value) if key in ("roll", "pitch", "yaw") else value
+            row[key] = number(payload, key, low, high)
 
 
 def _real_underground_fields(payload, row):
-    row["roll"] = _wrap_degrees(number(payload, "roll", -720, 720))
-    row["pitch"] = _wrap_degrees(number(payload, "pitch", -720, 720))
+    row["roll"] = number(payload, "roll", -180, 180)
+    row["pitch"] = number(payload, "pitch", -180, 180)
     _real_mpu_fields(payload, row)
 
     row["vibration"] = number(payload, "vibration", 0, 1)
@@ -149,30 +137,29 @@ def _previous_is_stale(previous, now):
 
 
 def _is_fresh_live_counter_reset(payload, previous, now):
-    """Return True for a likely physical ESP32 node reboot.
+    """Return True only for a likely physical node reboot.
 
-    A common failure mode during demos is:
-      1. UG-02 was previously stored at a high sequence number.
-      2. The node reboots and starts again from sequence 1.
-      3. Flask misses the first few startup packets.
-      4. Sequence 4/5/6 is then treated as historical, so the dashboard keeps
-         rendering the node OFFLINE even though PlatformIO shows it is alive.
-
-    Buffered TELEMETRY replay is deliberately excluded. Only fresh live serial
-    transports may rotate the node session automatically.
+    We automatically rotate the backend session only for non-buffered live serial
+    formats. Buffered TELEMETRY replay never triggers this, so stale gateway data
+    still cannot make a dead node appear live.
     """
     if not previous:
         return False
 
     new_sequence = payload.get("sequence")
     old_sequence = previous.get("sequence")
-
     if type(new_sequence) is not int or type(old_sequence) is not int:
         return False
-
     if new_sequence >= old_sequence:
         return False
 
+    # Nodes start again near zero after an ESP32 reboot. Do not infer a reboot
+    # from arbitrary out-of-order numbers.
+    if new_sequence > 3:
+        return False
+
+    # Only immediate/live transports are eligible. Buffered gateway replays must
+    # continue to use the explicit manual-session path if needed.
     if payload.get("_transport") not in ("HUB_DATA", "LEGACY"):
         return False
 
@@ -182,16 +169,10 @@ def _is_fresh_live_counter_reset(payload, previous, now):
     if queue_age_ms > 5000:
         return False
 
-    # Strong evidence: the last applied live reading has already gone stale.
-    # Do not require sequence <= 3 here, because Flask may miss the first few
-    # startup packets while the browser/server is restarting.
-    if _previous_is_stale(previous, now):
-        return True
-
-    # Also accept an immediate small startup-range reset while the previous
-    # session had clearly progressed. The window is configurable for testing.
-    startup_window = max(3, int(os.environ.get("TERRAVEIL_REBOOT_SEQUENCE_WINDOW", "25")))
-    return new_sequence <= startup_window and old_sequence >= 10
+    # Strong evidence of a reboot: either the former reading has already gone
+    # stale, or the old counter had clearly progressed before suddenly returning
+    # to the startup range.
+    return _previous_is_stale(previous, now) or old_sequence >= 10
 
 
 def ingest(payload, source="REAL"):

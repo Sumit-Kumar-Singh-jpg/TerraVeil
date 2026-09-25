@@ -1,4 +1,92 @@
-import * as THREE from 'three';
+#!/usr/bin/env python3
+"""
+TerraVeil live hardware fix.
+
+Run from the TerraVeil repository root:
+    python3 terraveil_live_fix.py
+
+This patches:
+  - telemetry.py: robust live sequence-reset/session recovery + MPU angle normalization.
+  - static/js/node-orientation.js: faster frame-rate-independent 3D orientation rendering.
+
+Backups are created next to the edited files.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path.cwd()
+TELEMETRY = ROOT / "telemetry.py"
+VIEWER = ROOT / "static" / "js" / "node-orientation.js"
+
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def backup(path: Path) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing file: {path}")
+    shutil.copy2(path, path.with_suffix(path.suffix + f".bak-{STAMP}"))
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"Expected exactly one match for {label}, found {count}")
+    return text.replace(old, new, 1)
+
+
+def patch_telemetry() -> None:
+    backup(TELEMETRY)
+    text = TELEMETRY.read_text(encoding="utf-8")
+
+    helper = '''\n\ndef _wrap_degrees(value):\n    """Normalize any valid calibrated MPU angle into [-180, 180].\n\n    The ESP32 firmware subtracts calibration offsets. Near the +/-180 boundary\n    that can temporarily produce values outside the conventional range even\n    though the physical attitude is valid. Store a normalized angle instead of\n    rejecting the packet and accidentally making a live node appear OFFLINE.\n    """\n    return ((float(value) + 180.0) % 360.0) - 180.0\n'''
+    if "def _wrap_degrees" not in text:
+        text = replace_once(
+            text,
+            '''def _as_aware(stamp):\n    value = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))\n    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)\n''',
+            '''def _as_aware(stamp):\n    value = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))\n    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)\n''' + helper,
+            "insert _wrap_degrees",
+        )
+
+    new_reset_function = '''def _is_fresh_live_counter_reset(payload, previous, now):\n    """Return True for a likely physical ESP32 node reboot.\n\n    A common failure mode during demos is:\n      1. UG-02 was previously stored at a high sequence number.\n      2. The node reboots and starts again from sequence 1.\n      3. Flask misses the first few startup packets.\n      4. Sequence 4/5/6 is then treated as historical, so the dashboard keeps\n         rendering the node OFFLINE even though PlatformIO shows it is alive.\n\n    Buffered TELEMETRY replay is deliberately excluded. Only fresh live serial\n    transports may rotate the node session automatically.\n    """\n    if not previous:\n        return False\n\n    new_sequence = payload.get("sequence")\n    old_sequence = previous.get("sequence")\n\n    if type(new_sequence) is not int or type(old_sequence) is not int:\n        return False\n\n    if new_sequence >= old_sequence:\n        return False\n\n    if payload.get("_transport") not in ("HUB_DATA", "LEGACY"):\n        return False\n\n    queue_age_ms = payload.get("queue_age_ms", 0)\n    if type(queue_age_ms) is not int or queue_age_ms < 0:\n        return False\n    if queue_age_ms > 5000:\n        return False\n\n    # Strong evidence: the last applied live reading has already gone stale.\n    # Do not require sequence <= 3 here, because Flask may miss the first few\n    # startup packets while the browser/server is restarting.\n    if _previous_is_stale(previous, now):\n        return True\n\n    # Also accept an immediate small startup-range reset while the previous\n    # session had clearly progressed. The window is configurable for testing.\n    startup_window = max(3, int(os.environ.get("TERRAVEIL_REBOOT_SEQUENCE_WINDOW", "25")))\n    return new_sequence <= startup_window and old_sequence >= 10\n'''
+
+    text, count = re.subn(
+        r"def _is_fresh_live_counter_reset\(payload, previous, now\):.*?\n\ndef ingest\(",
+        new_reset_function + "\n\ndef ingest(",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if count != 1:
+        raise RuntimeError("Could not replace _is_fresh_live_counter_reset")
+
+    text = replace_once(
+        text,
+        '''        "roll": (-180, 180),\n        "pitch": (-180, 180),\n        "yaw": (-180, 180),''',
+        '''        "roll": (-720, 720),\n        "pitch": (-720, 720),\n        "yaw": (-720, 720),''',
+        "angle limit expansion",
+    )
+
+    old_assignment = '''        if key in payload:\n            row[key] = number(payload, key, low, high)'''
+    new_assignment = '''        if key in payload:\n            value = number(payload, key, low, high)\n            row[key] = _wrap_degrees(value) if key in ("roll", "pitch", "yaw") else value'''
+    text = replace_once(text, old_assignment, new_assignment, "normalize MPU fields")
+
+    text = replace_once(
+        text,
+        '''    row["roll"] = number(payload, "roll", -180, 180)\n    row["pitch"] = number(payload, "pitch", -180, 180)''',
+        '''    row["roll"] = _wrap_degrees(number(payload, "roll", -720, 720))\n    row["pitch"] = _wrap_degrees(number(payload, "pitch", -720, 720))''',
+        "normalize UG roll/pitch",
+    )
+
+    compile(text, str(TELEMETRY), "exec")
+    TELEMETRY.write_text(text, encoding="utf-8")
+
+
+VIEWER_JS = r'''import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const NODE_CONFIG = {
@@ -555,3 +643,29 @@ window.addEventListener('keydown', event => {
 
 ensureModal();
 makeCardsInteractive();
+'''
+
+
+def patch_viewer() -> None:
+    backup(VIEWER)
+    VIEWER.write_text(VIEWER_JS, encoding="utf-8")
+
+
+def main() -> None:
+    if not TELEMETRY.exists() or not VIEWER.exists():
+        raise SystemExit(
+            "Run this script from the TerraVeil repository root. "
+            "Expected telemetry.py and static/js/node-orientation.js."
+        )
+
+    patch_telemetry()
+    patch_viewer()
+
+    print("✅ TerraVeil live hardware patch applied.")
+    print(f"   Backups created with suffix: .bak-{STAMP}")
+    print("   Restart Flask: python3 app.py")
+    print("   Hard-refresh browser: Ctrl+Shift+R")
+
+
+if __name__ == "__main__":
+    main()

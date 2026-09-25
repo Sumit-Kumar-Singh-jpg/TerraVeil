@@ -30,16 +30,6 @@ const MODEL_AXIS_CORRECTION_DEG = {
     'LD-01': {x: 0, y: 0, z: 0}
 };
 
-// Most mechanical CAD/STL exports are Z-up. Three.js scenes are Y-up.
-// Rotating -90 deg around X maps CAD +Z to Three.js +Y.
-const CAD_Z_UP_TO_THREE_Y_UP = new THREE.Quaternion().setFromEuler(
-    new THREE.Euler(-Math.PI / 2, 0, 0, 'XYZ')
-);
-
-// Higher value = faster visual convergence to the latest live packet.
-const ORIENTATION_RESPONSE_HZ = 16;
-const MAX_FRAME_DT_SECONDS = 0.08;
-
 const state = {
     activeNodeId: null,
     reading: null,
@@ -51,8 +41,7 @@ const state = {
     controls: null,
     modelRoot: null,
     animationFrame: null,
-    viewerOpen: false,
-    lastFrameTime: 0,
+    resizeObserver: null,
     modelCache: new Map(),
     targetQuaternion: new THREE.Quaternion(),
     displayQuaternion: new THREE.Quaternion(),
@@ -194,7 +183,6 @@ function parseBinarySTL(buffer) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    geometry.computeVertexNormals();
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
 
@@ -236,8 +224,8 @@ function setupScene() {
     const width = Math.max(320, viewport.clientWidth);
     const height = Math.max(300, viewport.clientHeight);
 
-    const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true, powerPreference: 'high-performance'});
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     viewport.prepend(renderer.domElement);
@@ -279,6 +267,8 @@ function setupScene() {
 
     state.resizeObserver = new ResizeObserver(() => resizeScene());
     state.resizeObserver.observe(viewport);
+
+    animate();
 }
 
 function resizeScene() {
@@ -291,28 +281,16 @@ function resizeScene() {
     state.camera.updateProjectionMatrix();
 }
 
-function startAnimationLoop() {
-    if (state.animationFrame) return;
-    state.lastFrameTime = performance.now();
+function animate() {
     state.animationFrame = requestAnimationFrame(animate);
-}
-
-function animate(timestamp) {
-    state.animationFrame = null;
-    if (!state.viewerOpen) return;
-
-    const dt = Math.min(MAX_FRAME_DT_SECONDS, Math.max(0.001, (timestamp - state.lastFrameTime) / 1000));
-    state.lastFrameTime = timestamp;
-    const alpha = 1 - Math.exp(-ORIENTATION_RESPONSE_HZ * dt);
 
     if (state.modelRoot) {
-        state.displayQuaternion.slerp(state.targetQuaternion, alpha);
+        state.displayQuaternion.slerp(state.targetQuaternion, 0.12);
         state.modelRoot.quaternion.copy(state.displayQuaternion);
     }
 
     state.controls?.update();
     state.renderer?.render(state.scene, state.camera);
-    state.animationFrame = requestAnimationFrame(animate);
 }
 
 function setTargetOrientation(reading) {
@@ -322,8 +300,7 @@ function setTargetOrientation(reading) {
     const pitch = finite(reading.pitch) ? Number(reading.pitch) : 0;
     const yaw = finite(reading.yaw) ? Number(reading.yaw) : 0;
 
-    // Firmware packet uses roll=X, pitch=Y, yaw=Z in degrees.
-    // Yaw is relative because MPU6050 has no magnetometer.
+    // Intrinsic aerospace-style roll(X), pitch(Y), yaw(Z).
     const liveEuler = new THREE.Euler(deg(roll), deg(pitch), deg(yaw), 'ZYX');
     const liveQuaternion = new THREE.Quaternion().setFromEuler(liveEuler);
 
@@ -336,10 +313,7 @@ function setTargetOrientation(reading) {
     );
     state.correctionQuaternion.setFromEuler(correctionEuler);
 
-    state.targetQuaternion
-        .copy(liveQuaternion)
-        .multiply(state.correctionQuaternion)
-        .multiply(CAD_Z_UP_TO_THREE_Y_UP);
+    state.targetQuaternion.copy(liveQuaternion).multiply(state.correctionQuaternion);
 }
 
 async function swapModel(nodeId) {
@@ -360,7 +334,6 @@ async function swapModel(nodeId) {
         if (state.modelRoot) {
             state.scene.remove(state.modelRoot);
             state.modelRoot.traverse?.(child => {
-                if (child.geometry?.dispose) child.geometry.dispose();
                 if (child.material?.dispose) child.material.dispose();
             });
         }
@@ -373,9 +346,8 @@ async function swapModel(nodeId) {
         });
 
         const mesh = new THREE.Mesh(geometry, material);
-        const edgesGeometry = new THREE.EdgesGeometry(geometry, 28);
         const edges = new THREE.LineSegments(
-            edgesGeometry,
+            new THREE.EdgesGeometry(geometry, 28),
             new THREE.LineBasicMaterial({
                 color: 0x334155,
                 transparent: true,
@@ -393,7 +365,6 @@ async function swapModel(nodeId) {
         root.quaternion.copy(state.displayQuaternion);
 
         loading.classList.add('hidden');
-        state.renderer?.render(state.scene, state.camera);
     } catch (error) {
         console.error('[TerraVeil] STL viewer error:', error);
         loading.textContent = `Unable to load STL: ${error.message}`;
@@ -488,7 +459,6 @@ async function openModal(nodeId) {
     state.targetQuaternion.identity();
     state.displayQuaternion.identity();
 
-    state.viewerOpen = true;
     state.modal.classList.add('open');
     state.modal.setAttribute('aria-hidden', 'false');
     document.body.classList.add('node-orientation-modal-open');
@@ -496,7 +466,6 @@ async function openModal(nodeId) {
     renderTelemetry();
     await swapModel(nodeId);
     requestAnimationFrame(resizeScene);
-    startAnimationLoop();
 }
 
 function closeModal() {
@@ -504,7 +473,6 @@ function closeModal() {
     state.modal.classList.remove('open');
     state.modal.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('node-orientation-modal-open');
-    state.viewerOpen = false;
     state.activeNodeId = null;
     state.reading = null;
 }

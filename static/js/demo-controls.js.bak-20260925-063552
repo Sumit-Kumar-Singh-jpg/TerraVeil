@@ -115,8 +115,7 @@
             };
         }
 
-        const nodes = (telemetry.nodes || []).filter(n =>
-            (alertState?.demo_node_ids || []).includes(n.node_id));
+        const nodes = telemetry.nodes || [];
         const readings = telemetry.readings || {};
 
         if (!nodes.length) {
@@ -127,13 +126,6 @@
             };
         }
 
-        if (alertState?.baseline_progress) {
-            return {
-                ready: alertState.baseline_progress.ready === true,
-                disarmed: false,
-                text: alertState.baseline_progress.text || 'Waiting for fresh baseline readings'
-            };
-        }
         const parts = nodes.map(node => {
             const reading = readings[node.node_id];
             const count = Number(reading?.baseline_samples) || 0;
@@ -173,9 +165,7 @@
         seismicButton.disabled =
             !isReal ||
             !state.ready ||
-            alertState?.status === 'RED_ALERT' ||
-            alertState?.status === 'EARLY_WARNING' ||
-            alertState?.demo_armed !== true;
+            alertState?.status === 'RED_ALERT';
 
         statusElement.textContent = state.text;
         statusElement.classList.toggle('armed', state.ready);
@@ -214,7 +204,6 @@
 
     zeroButton.addEventListener('click', async () => {
         if (telemetry?.mode !== 'REAL') return;
-        window.unlockTerraVeilSirenAudio?.();
 
         zeroButton.disabled = true;
         statusElement.textContent =
@@ -247,7 +236,6 @@
     });
 
     seismicButton.addEventListener('click', async () => {
-        window.unlockTerraVeilSirenAudio?.();
         seismicButton.disabled = true;
 
         try {
@@ -293,16 +281,6 @@
             console.error('[TerraVeil] Early warning ACK failed:', error);
         }
     }
-
-    const endButton = document.getElementById('btn-stage3-end');
-    endButton?.addEventListener('click', async () => {
-        const resp = await fetch('/api/demo/end', {method:'POST'});
-        if (!resp.ok) { statusElement.textContent = 'Failed to end demo'; return; }
-        alertState = (await resp.json()).alert_state;
-        hideEarlyWarning(true);
-        window.exitRedAlertUI?.();
-        updateControls();
-    });
 
     window.addEventListener('terraveil:telemetry', event => {
         telemetry = event.detail;

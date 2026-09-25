@@ -518,11 +518,8 @@ function updateAlertsLog(readings, events=[]) {
     
     if (!logContainer) return;
 
-    // REAL dashboard reports only current-session risk observations, not old demos.
+    const liveAlarmCount = Object.values(readings).filter(r => r.online && ['MEDIUM','HIGH','CRITICAL'].includes(r.risk_level)).length;
     const activeAlarms = events;
-    const liveAlarmCount = currentMode === 'REAL'
-        ? new Set(activeAlarms.filter(r => ['MEDIUM','HIGH','CRITICAL'].includes(r.risk_level)).map(r => r.node_id)).size
-        : Object.values(readings).filter(r => r.online && ['MEDIUM','HIGH','CRITICAL'].includes(r.risk_level)).length;
 
     document.getElementById("sidebar-alert-badge").innerText = liveAlarmCount;
     const bellBadge = document.getElementById("bell-badge");
@@ -1296,13 +1293,6 @@ let alertTriggerInFlight = false;
 let alertDurationTimer = null;
 let alertStartTimestamp = null;
 let sirenAudioCtx = null;
-// Unlock browser audio synchronously from the user's SET ZERO gesture.
-window.unlockTerraVeilSirenAudio = function () {
-    try {
-        if (!sirenAudioCtx) sirenAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (sirenAudioCtx.state === 'suspended') sirenAudioCtx.resume();
-    } catch (e) { console.warn('Audio unavailable:', e); }
-};
 let sirenOsc = null;
 let sirenGain = null;
 let sirenLFO = null;
@@ -1451,10 +1441,7 @@ function exitRedAlertUI() {
 }
 
 // Trigger emergency alert via API
-window.exitRedAlertUI = exitRedAlertUI;
-
 async function triggerEmergencyAlert() {
-    window.unlockTerraVeilSirenAudio?.();
 
     // Prevent duplicate simultaneous siren triggers.
     if (

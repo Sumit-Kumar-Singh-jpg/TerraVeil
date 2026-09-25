@@ -768,7 +768,7 @@ void loop()
         }
         else
         {
-            // Polls for UG-02 / LD-01 are intentionally ignored.
+            // Polls for UG-01 / LD-01 are intentionally ignored.
             LoRa.receive();
         }
     }

@@ -24,7 +24,6 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/node-placement.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/node-orientation.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/stage3-demo.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/demo-history.css') }}">
     <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}</script>
 </head>
 <body>
@@ -198,10 +197,6 @@
             <button type="button" id="btn-stage3-zero"
                     class="stage3-control-btn zero">
                 SET ZERO / ARM DEMO
-            </button>
-
-            <button type="button" id="btn-stage3-end" class="stage3-control-btn zero">
-                END DEMO / SILENCE
             </button>
 
             <button type="button" id="btn-stage3-geophone"
@@ -534,7 +529,6 @@
                         <span class="panel-eyebrow">SAFETY LOGS</span>
                         <h3>System Anomalies & Risk Triggers</h3>
                     </div>
-                    <div id="demo-session-conversations" aria-live="polite"></div>
                     <div class="alerts-table-wrapper">
                         <table class="industrial-table" id="safety-logs-table">
                             <thead>
@@ -868,7 +862,6 @@
 <!-- Application Control Logic -->
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script src="{{ url_for('static', filename='js/demo-controls.js') }}"></script>
-<script src="{{ url_for('static', filename='js/demo-history.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/digital-twin.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='js/insar.js') }}"></script>
 <script src="{{ url_for('static', filename='js/insar-zones.js') }}"></script>

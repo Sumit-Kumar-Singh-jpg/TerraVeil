@@ -2,7 +2,7 @@
 
 .stage3-demo-bar {
     display: grid;
-    grid-template-columns: auto auto auto auto minmax(240px, 1fr);
+    grid-template-columns: auto auto auto minmax(280px, 1fr);
     align-items: center;
     gap: 8px;
     padding: 8px 16px;

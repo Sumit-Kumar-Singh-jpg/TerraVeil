@@ -10,9 +10,6 @@ from pathlib import Path
 import os
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from datetime import datetime
-import threading
-from functools import wraps
-import demo_session as demo_store
 
 from database import (
     init_db,
@@ -32,15 +29,6 @@ from simulation_placement import placement_api
 app.register_blueprint(placement_api)
 app.config["MAX_CONTENT_LENGTH"] = 8192
 init_db()
-demo_store.init_demo_db()
-DEMO_LOCK = threading.RLock()
-
-def synchronized_demo(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        with DEMO_LOCK:
-            return fn(*args, **kwargs)
-    return wrapper
 
 from telemetry import ingest, network_state
 from stage3_risk import BASELINE_SAMPLES
@@ -51,9 +39,6 @@ alert_state = {
     "sirens_active": False,
     "alert_kind": None,
     "demo_armed": False,
-    "demo_id": None,
-    "demo_node_ids": [],
-    "baseline_progress": {"ready": False, "nodes": []},
     "collapse_latched": False,
     "baseline_samples_required": BASELINE_SAMPLES,
     "geophone_event": None,
@@ -80,35 +65,68 @@ def index():
 @app.route("/api/demo/reset", methods=["POST"])
 @app.route("/api/demo/baseline", methods=["POST"])
 def demo_reset():
-    """New independent demo with only the nodes currently streaming fresh data."""
+    """Set the current physical pose as a new monitoring zero."""
+    global alert_state
+
     if mode() != "REAL":
-        return jsonify(success=False, error="SET ZERO requires REAL HARDWARE mode"), 400
-    with DEMO_LOCK:
-        try:
-            demo = demo_store.start_demo()
-        except ValueError as error:
-            return jsonify(success=False, error=str(error)), 409
-        alert_state.update(status="NORMAL", sirens_active=False, alert_kind=None,
-                           demo_armed=True, collapse_latched=False,
-                           demo_id=demo['demo_id'], demo_node_ids=demo['node_ids'],
-                           baseline_progress={'ready': False, 'nodes': []},
-                           geophone_event=None, triggered_at=None, acknowledged_at=None,
-                           message=f"New demo started for {', '.join(demo['node_ids'])}. Keep them still during baseline capture.")
-        for siren in alert_state['siren_zones']:
-            siren['status'] = 'OFF'
-        return jsonify(success=True, message=alert_state['message'],
-                       baseline_samples_required=BASELINE_SAMPLES,
-                       sessions=demo['node_sessions'], alert_state=alert_state)
+        return jsonify(
+            success=False,
+            error="Baseline reset is only available in REAL HARDWARE mode"
+        ), 400
+
+    alert_state["status"] = "NORMAL"
+    alert_state["sirens_active"] = False
+    alert_state["alert_kind"] = None
+    alert_state["triggered_at"] = None
+    alert_state["acknowledged_at"] = datetime.utcnow().isoformat()
+    alert_state["message"] = (
+        "New demo baseline started. Keep all physical nodes still "
+        f"for {BASELINE_SAMPLES} fresh packets."
+    )
+    alert_state["demo_armed"] = True
+    alert_state["collapse_latched"] = False
+    alert_state["geophone_event"] = None
+
+    for siren in alert_state["siren_zones"]:
+        siren["status"] = "OFF"
+
+    sessions = {}
+    for node in get_nodes("REAL"):
+        sessions[node["node_id"]] = start_node_session(node["node_id"])
+
+    return jsonify(
+        success=True,
+        message=(
+            "SET ZERO accepted. SQLite history preserved; "
+            "fresh baseline capture started."
+        ),
+        baseline_samples_required=BASELINE_SAMPLES,
+        sessions=sessions,
+        alert_state=alert_state,
+    )
 
 
 def _demo_baselines_ready():
-    demo = demo_store.active_demo()
-    return bool(demo and alert_state.get('demo_armed')
-                and demo_store.progress(demo)['ready'])
+    nodes = get_nodes("REAL")
+    readings = {
+        row["node_id"]: row
+        for row in get_latest_readings("REAL")
+    }
+
+    return (
+        bool(nodes)
+        and len(readings) == len(nodes)
+        and all(
+            int(
+                readings.get(node["node_id"], {}).get("baseline_ready")
+                or 0
+            ) == 1
+            for node in nodes
+        )
+    )
 
 
 @app.route("/api/demo/seismic", methods=["POST"])
-@synchronized_demo
 def simulate_geophone_precursor():
     """Explicitly simulated four-geophone precursor for the SIH demo."""
     global alert_state
@@ -126,16 +144,11 @@ def simulate_geophone_precursor():
         ), 409
 
     if not _demo_baselines_ready():
-        return jsonify(success=False,
-                       error="No participating node has a fresh, stable completed baseline."), 409
+        return jsonify(
+            success=False,
+            error="Baseline capture is not complete for all physical nodes yet."
+        ), 409
 
-    with DEMO_LOCK:
-        demo = demo_store.active_demo()
-        if not demo or not alert_state.get('demo_armed') or not _demo_baselines_ready():
-            return jsonify(success=False, error='Demo not ready or already ended'), 409
-        if not demo_store.claim_once(demo['demo_id'], 'geophone_fired', 'SEISMIC',
-                                    'SIMULATED geophone precursor activated (not physical seismic measurements).'):
-            return jsonify(success=False, error='Geophone precursor already triggered in this demo.'), 409
     origin_time = datetime.utcnow().isoformat()
     geophone_event = {
         "simulated": True,
@@ -153,10 +166,7 @@ def simulate_geophone_precursor():
         "label": "SIMULATED 4-GEOPHONE LOCALIZATION — DEMO ONLY",
     }
 
-    with DEMO_LOCK:
-        if demo_store.active_demo() is None or alert_state.get('demo_id') != demo['demo_id']:
-            return jsonify(success=False, error='Session changed while triggering precursor'), 409
-        alert_state.update(
+    alert_state.update(
         status="EARLY_WARNING",
         sirens_active=True,
         alert_kind="SIMULATED_GEOPHONE",
@@ -170,53 +180,42 @@ def simulate_geophone_precursor():
         geophone_event=geophone_event,
     )
 
-        for siren in alert_state["siren_zones"]:
-            siren["status"] = "ON"
+    for siren in alert_state["siren_zones"]:
+        siren["status"] = "ON"
 
-        return jsonify(
-            success=True,
-            message="Simulated geophone precursor issued.",
-            alert_state=alert_state,
-        )
+    return jsonify(
+        success=True,
+        message="Simulated geophone precursor issued.",
+        alert_state=alert_state,
+    )
 
 
 def accept_telemetry(payload):
-    """Risk observations are logged per demo; one physical alarm is allowed per demo."""
-    with DEMO_LOCK:
-        result = ingest(payload)
-        if not result.get('success') or not result.get('applied') or mode() != 'REAL':
-            return result
-        demo = demo_store.active_demo()
-        if not demo or not alert_state.get('demo_armed') or alert_state.get('demo_id') != demo['demo_id']:
-            return result
-        # Fetch the EXACT row just ingested, not a last-known high-risk sample.
-        with demo_store.get_connection() as conn:
-            got = conn.execute('SELECT * FROM readings WHERE id=?', (result['id'],)).fetchone()
-        reading = dict(got) if got else None
-        if not reading or reading['data_source'] != 'REAL' or reading['processed'] != 1:
-            return result
-        node_id = reading['node_id']
-        if reading['session_id'] != demo['node_sessions'].get(node_id):
-            return result  # An offline/unselected node or an old pre-zero session.
-        if not demo_store.fresh(reading):
-            return result
-        # Avoid logging alarms from an unstable baseline or from the first N samples.
-        if not demo_store.eligible_node(demo, node_id, reading):
-            return result
-        demo_store.note_risk(demo, reading)
-        if (isinstance(payload, dict) and payload.get('_transport') in ('HUB_DATA', 'LEGACY')
-                and reading.get('risk_level') in ('HIGH','CRITICAL')
-                and demo_store.physical_deformation(node_id, reading)
-                and not alert_state.get('collapse_latched')):
-            msg = (f'PERSISTENT PHYSICAL DEFORMATION at {node_id}: threshold-confirmed '
-                   'movement from this demo baseline. Inspect the affected area.')
-            if demo_store.claim_once(demo['demo_id'], 'alarm_fired', 'PHYSICAL_ALARM', msg, node_id):
-                alert_state.update(status='RED_ALERT', sirens_active=True,
-                                   alert_kind='PHYSICAL_DEFORMATION', collapse_latched=True,
-                                   triggered_at=datetime.utcnow().isoformat(), message=msg)
-                for siren in alert_state['siren_zones']:
-                    siren['status'] = 'ON'
-        return result
+    result = ingest(payload)
+
+    if (
+        result.get("applied")
+        and result.get("risk_level") == "CRITICAL"
+        and mode() == "REAL"
+        and alert_state.get("demo_armed")
+        and not alert_state.get("collapse_latched")
+    ):
+        alert_state.update(
+            status="RED_ALERT",
+            sirens_active=True,
+            alert_kind="PHYSICAL_DEFORMATION",
+            collapse_latched=True,
+            triggered_at=datetime.utcnow().isoformat(),
+            message=(
+                "CRITICAL PHYSICAL DEFORMATION: persistent "
+                "baseline-relative movement confirmed by TerraVeil "
+                "local nodes. Immediate evacuation / inspection response."
+            ),
+        )
+        for siren in alert_state["siren_zones"]:
+            siren["status"] = "ON"
+
+    return result
 
 
 @app.route('/api/telemetry', methods=['POST'])
@@ -236,14 +235,6 @@ def system():
         except ValueError as error:
             return jsonify(success=False, error=str(error)), 400
         if mode() == 'SIMULATION':
-            with DEMO_LOCK:
-                active = demo_store.active_demo()
-                if active:
-                    demo_store.end_demo(active['demo_id'], 'Switched to simulation: demo disarmed.')
-                alert_state.update(status='NORMAL', sirens_active=False, demo_armed=False,
-                                   collapse_latched=True, alert_kind=None, geophone_event=None)
-                for siren in alert_state['siren_zones']:
-                    siren['status'] = 'OFF'
             start_simulator()
     return jsonify(network_state())
 
@@ -253,30 +244,7 @@ def live_state():
     source = mode()
     registered = get_nodes(source)
     readings = get_latest_readings(source)
-    # REAL events in the dashboard are restricted to the current active demo.
-    demo = demo_store.active_demo() if source == 'REAL' else None
-    if source == 'REAL':
-        events = []
-        if demo:
-            with demo_store.get_connection() as conn:
-                for node_id, session_id in demo['node_sessions'].items():
-                    events.extend(dict(r) for r in conn.execute('''SELECT * FROM readings
-                        WHERE node_id=? AND session_id=? AND data_source='REAL' AND processed=1
-                        AND (anomaly=1 OR persistent=1) ORDER BY id DESC LIMIT 10''',
-                        (node_id, session_id)))
-            events.sort(key=lambda r: r['id'], reverse=True)
-            # Show only the newest instance of each node/severity, not each one-second sample.
-            seen = set()
-            distinct = []
-            for row in events:
-                key = (row['node_id'], row['risk_level'])
-                if key not in seen:
-                    seen.add(key)
-                    distinct.append(row)
-            events = distinct[:12]
-    else:
-        events = get_recent_events(source)
-    response = jsonify(system=network_state(source), nodes=registered, readings=readings, events=events,
+    response = jsonify(system=network_state(source), nodes=registered, readings=readings, events=get_recent_events(source),
         twin=build_twin_state(registered, readings, alert_state))
     response.headers['Cache-Control'] = 'no-store'
     return response
@@ -344,46 +312,13 @@ def history(node_id):
 
 @app.route("/api/alert/status", methods=["GET"])
 def get_alert_status():
-    with DEMO_LOCK:
-        alert_state['baseline_progress'] = demo_store.progress(demo_store.active_demo())
-        return jsonify(alert_state)
-
-
-@app.route('/api/demo/history', methods=['GET'])
-def demo_history():
-    try:
-        return jsonify(demo_store.session_history(request.args.get('demo_id')))
-    except ValueError as error:
-        return jsonify(success=False, error=str(error)), 404
-
-
-@app.route('/api/demo/end', methods=['POST'])
-def end_demo():
-    with DEMO_LOCK:
-        demo = demo_store.active_demo()
-        if demo:
-            demo_store.end_demo(demo['demo_id'])
-        alert_state.update(status='NORMAL', sirens_active=False, demo_armed=False,
-                           alert_kind=None, collapse_latched=True, geophone_event=None,
-                           message='Demo ended. Alarm disarmed; old risk events kept in session history.')
-        for siren in alert_state['siren_zones']:
-            siren['status'] = 'OFF'
-        return jsonify(success=True, alert_state=alert_state)
-
+    return jsonify(alert_state)
 
 
 @app.route("/api/alert/trigger", methods=["POST"])
-@synchronized_demo
 def trigger_alert():
     global alert_state
     req_data = request.get_json(silent=True) or {}
-    with DEMO_LOCK:
-        demo = demo_store.active_demo()
-        if demo:
-            if not alert_state.get('demo_armed') or not demo_store.claim_once(
-                demo['demo_id'], 'alarm_fired', 'MANUAL_ALARM',
-                'Manual emergency command invoked by operator (not a physical sensor detection).'):
-                return jsonify(success=False, error='Physical alarm already used or demo disarmed.'), 409
     custom_msg = req_data.get("message") or "CRITICAL SUBSIDENCE COLLAPSE HAZARD DETECTED — ALL MINE SIRENS ACTIVATED — EVACUATE PANEL EAST & UNDERGROUND WORKINGS IMMEDIATELY!"
     
     alert_state["status"] = "RED_ALERT"
@@ -403,7 +338,6 @@ def trigger_alert():
 
 
 @app.route("/api/alert/reset", methods=["POST"])
-@synchronized_demo
 def reset_alert():
     """Acknowledge/silence the current alert WITHOUT changing baselines."""
     global alert_state
@@ -423,10 +357,6 @@ def reset_alert():
     # Red alert ACK latches/disarms this completed demo cycle.
     if previous_status == "RED_ALERT":
         alert_state["demo_armed"] = False
-        alert_state["collapse_latched"] = True
-        demo = demo_store.active_demo()
-        if demo:
-            demo_store.end_demo(demo['demo_id'], 'Physical alarm acknowledged; demo disarmed.')
 
     for siren in alert_state["siren_zones"]:
         siren["status"] = "OFF"
